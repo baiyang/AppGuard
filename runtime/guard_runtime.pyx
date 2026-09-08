@@ -13,6 +13,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import FunctionType
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -23,6 +24,7 @@ from libc.time cimport time as c_time
 
 cdef extern from *:
     const char *APPGUARD_PUBLIC_KEY
+    const char *APPGUARD_BOOTSTRAP_KEY
 
 cdef extern from "Python.h":
     object PyEval_EvalCode(object code, object globals, object locals)
@@ -33,6 +35,8 @@ cdef object _cached_license = None
 cdef object _cached_stamp = None
 cdef object _content_key = None
 cdef object _checkpoint = None
+cdef object _invoker = None
+cdef dict _function_codes = {}
 cdef long long _max_seen = 0
 cdef long long _saved_seen = 0
 
@@ -85,6 +89,11 @@ cdef object _load_manifest():
                 raise ValueError("Wrong Python ABI")
             if not isinstance(candidate["modules"], dict):
                 raise ValueError("Invalid module table")
+            if candidate.get("layout") != "function-bodies-v1" or not candidate.get("functions"):
+                raise ValueError("Unsupported protection layout")
+            bootstrap_key = bytes.fromhex((<bytes>APPGUARD_BOOTSTRAP_KEY).decode())
+            if hashlib.sha256(bootstrap_key).hexdigest() != candidate["bootstrap_key_sha256"]:
+                raise ValueError("Runtime does not match this release")
             _manifest = candidate
         except Exception as exc:
             raise LicenseError("BUNDLE_INVALID") from exc
@@ -184,24 +193,116 @@ def require_valid():
 _checkpoint = require_valid
 
 
-def execute_module(str relative, dict namespace):
-    """Authenticate and execute a module without writing decrypted code to disk."""
-    _require()
+cdef object _read_code(str section, str identifier, bytes key):
     try:
-        entry = _load_manifest()["modules"][relative]
+        entry = _load_manifest()[section][identifier]
         filename = entry["file"]
-        if Path(filename).name != filename or not filename.endswith(".agc"):
+        suffix = ".agc" if section == "modules" else ".agf"
+        if Path(filename).name != filename or not filename.endswith(suffix):
             raise ValueError("Invalid module path")
-        blob = (_bundle / "modules" / filename).read_bytes()
+        blob = (_bundle / section / filename).read_bytes()
         if hashlib.sha256(blob).hexdigest() != entry["sha256"]:
             raise ValueError("Module digest mismatch")
-        aad = f"{_manifest['build_id']}:{relative}".encode()
-        data = AESGCM(_content_key).decrypt(blob[:12], blob[12:], aad)
-        code = marshal.loads(data)
+        kind = "module" if section == "modules" else "function"
+        aad = f"{_manifest['build_id']}:{kind}:{identifier}".encode()
+        return marshal.loads(AESGCM(key).decrypt(blob[:12], blob[12:], aad))
     except Exception as exc:
         raise LicenseError("MODULE_INVALID") from exc
+
+
+def execute_module(str relative, dict namespace):
+    """Load authenticated startup structure; licensed bodies stay encrypted."""
+    key = bytes.fromhex((<bytes>APPGUARD_BOOTSTRAP_KEY).decode())
+    code = _read_code("modules", relative, key)
     namespace["__appguard_check__"] = _checkpoint
+    namespace["__appguard_invoke__"] = _invoker
     PyEval_EvalCode(code, namespace, namespace)
+
+
+cdef class _LicensedIterator:
+    cdef object iterator
+    cdef bint closed
+
+    def __init__(self, iterator):
+        self.iterator = iterator
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self.send(None)
+
+    def send(self, value):
+        try:
+            _require()
+            try:
+                result = self.iterator.send(value)
+            except StopIteration:
+                _require()
+                raise
+            _require()
+            return result
+        except BaseException:
+            self.close()
+            raise
+
+    def throw(self, *args):
+        # Cancellation must reach the original generator even after expiry.
+        try:
+            result = self.iterator.throw(*args)
+            _require()
+            return result
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.iterator.close()
+
+
+cdef class _LicensedAwaitable:
+    cdef object coroutine
+
+    def __init__(self, coroutine):
+        self.coroutine = coroutine
+
+    def __await__(self):
+        return _await_result(self.coroutine).__await__()
+
+
+async def _await_result(coroutine):
+    try:
+        _require()
+    except BaseException:
+        coroutine.close()
+        raise
+    # Delegate cancellation and asynchronous finally blocks to the normal task.
+    result = await coroutine
+    _require()
+    return result
+
+
+def invoke_function(str identifier, dict namespace, tuple args, dict kwargs):
+    """Verify on every call and keep licensed code objects out of Python globals."""
+    _require()
+    code = _function_codes.get(identifier)
+    if code is None:
+        code = _read_code("functions", identifier, _content_key)
+        _function_codes[identifier] = code
+    function = FunctionType(code, namespace)
+    result = function(*args, **kwargs)
+    if code.co_flags & 0x20:
+        return _LicensedIterator(result)
+    if code.co_flags & 0x80:
+        return _LicensedAwaitable(result)
+    _require()
+    return result
+
+
+_invoker = invoke_function
 
 
 cdef void _atomic_write(object path, bytes data) except *:
@@ -247,11 +348,11 @@ def install_license(bytes raw):
     license, key = _validate(raw)
     # Verify the release key before replacing a working license.
     manifest = _load_manifest()
-    relative = next(iter(manifest["modules"]))
-    entry = manifest["modules"][relative]
-    blob = (_bundle / "modules" / entry["file"]).read_bytes()
+    identifier = next(iter(manifest["functions"]))
+    entry = manifest["functions"][identifier]
+    blob = (_bundle / "functions" / entry["file"]).read_bytes()
     try:
-        AESGCM(key).decrypt(blob[:12], blob[12:], f"{manifest['build_id']}:{relative}".encode())
+        AESGCM(key).decrypt(blob[:12], blob[12:], f"{manifest['build_id']}:function:{identifier}".encode())
     except Exception as exc:
         raise LicenseError("LICENSE_WRONG_CONTENT_KEY") from exc
     _atomic_write(_license_dir() / "license.json", raw)
@@ -266,9 +367,3 @@ def status():
                 "expires_at": license["expires_at"], "license_id": license["license_id"]}
     except LicenseError as exc:
         return {"valid": False, "code": str(exc)}
-
-
-def application_spec():
-    """Only signed bundle metadata controls the default business entrypoint."""
-    manifest = _load_manifest()
-    return {"application": manifest["application"], "python_path": manifest["python_path"]}

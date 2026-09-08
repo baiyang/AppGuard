@@ -78,6 +78,7 @@ def main():
             payload = json.loads(base64.b64decode(envelope["payload"], validate=True))
             payload.pop("wrapped_key", None)
             payload.pop("modules", None)
+            payload.pop("functions", None)
             print(json.dumps({"verified": False, "metadata": payload}, indent=2))
     except (ValueError, OSError, KeyError) as exc:
         parser.exit(1, f"AppGuard: {exc}\n")

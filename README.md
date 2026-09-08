@@ -1,135 +1,103 @@
 # AppGuard
 
-AppGuard 0.1 is an offline licensing and encrypted-module delivery tool for
-CPython 3.11. Publisher tooling lives in this repository; the customer receives
-only a native loader, a WSGI activation host, encrypted modules and public assets.
-It is an initial implementation, not a PyArmor-equivalent anti-reversing system.
+为 Python Web 项目提供代码加密交付和离线授权。发行方打包应用，部署方启动后申请许可证，导入许可证即可使用受保护功能。
 
-## Components
+当前支持 **CPython 3.11**，提供 **Flask 插件和 WSGI 中间件**。其他 WSGI 项目可以接入中间件；ASGI 项目需要另外适配。运行环境的系统、CPU 架构和 Python 版本必须与构建产物匹配。
 
-- `appguard/`: publisher CLI, Ed25519 signing, AST checkpoints and AES-256-GCM packaging.
-- `runtime/guard_runtime.pyx`: Cython-compiled `guard_runtime.so`, with a compiled-in
-  publisher public key. It verifies signed metadata, unwraps deployment-specific
-  content keys and evaluates decrypted code objects in memory.
-- `appguard_host.py`: same-process WSGI activation page and request gate, with
-  lazy business application initialization, CSRF protection and activation limits.
-- `tests/`: publisher tests and native runtime tests against the deployed image.
-- `tools/`: release hygiene utilities. Publisher signing tools are not in the runtime wheel.
+## 从这里开始
 
-## Trust and Cryptography
+- **第一次制作交付包**：按[首次发行指南](docs/first-release.md)运行内置 Flask 示例，完成打包、部署和授权。
+- **已收到交付包**：按发行方提供的部署说明启动应用，再按下方步骤激活。[示例部署说明](examples/flask/DEPLOY.md)可随镜像一起交付。
+- **接入自己的项目**：参考下方接入配置，再使用首次发行指南中的打包步骤。
 
-Each release has a random 256-bit content key and a unique build ID. Module AAD
-binds ciphertext to its build ID and original relative path. A signed manifest
-contains encrypted-module digests and the application entrypoint. Never change
-the nonce/key rules or replace the cryptography library with custom primitives.
+## 首次部署与激活
 
-The customer deployment generates an X25519 identity. The issuer wraps the content
-key using ephemeral X25519, HKDF-SHA256 (`appguard-wrap-v1`) and AES-256-GCM. An
-Ed25519 signature covers all license fields, including this key envelope. A license
-is bound to one product, build and deployment public key. Publisher keys and release
-content keys must remain in the publisher's private storage and backups.
+流程：**发行方交付应用 → 部署方启动并下载授权申请 → 发行方签发许可证 → 部署方导入激活**。部署环境无需联网验证授权。
 
-The runtime authenticates the envelope before reading its policy, rejects expired
-or future licenses, and authenticates modules before unmarshalling. Native global
-state retains content keys; the Python API does not return decrypted code or keys.
-This does not prevent extraction by a hostile Python interpreter or host administrator.
+发行方需要提供：
 
-## Publisher Workflow
+| 文件 | 提供时间 | 用途 |
+| --- | --- | --- |
+| 应用镜像，如 `example-web-001.tar` | 首次部署前 | 包含应用、加密代码、匹配的 AppGuard 运行时和依赖 |
+| 部署说明及必要的配置模板 | 首次部署前 | 明确启动命令、端口、数据卷，以及项目所需的数据库等配置 |
+| 许可证，如 `customer-001.license` | 收到授权申请后 | 授权当前部署使用指定版本 |
 
-Use Python 3.11 with `cryptography==45.0.4`. No separate GraphRAG environment is
-needed; the medical-baike backend Python can run the publisher commands.
+### 1. 部署方启动应用
+
+以下命令适用于本仓库示例的交付包；自己的项目使用发行方提供的镜像名和配置。
 
 ```sh
-python -m appguard keygen --out .data/issuer.key
-python -m appguard build --source /path/to/project --config /path/to/guard.toml \
-  --issuer-key .data/issuer.key --out .data/releases/release-001
-python -m appguard issue --release .data/releases/release-001/release.json \
-  --issuer-key .data/issuer.key --request activation-request.json \
-  --customer customer-001 --expires 2027-03-08T00:00:00Z --out customer-001.license
+docker load -i example-web-001.tar
+docker volume create example-web-license
+docker run -d --name example-web -p 8000:8000 \
+  --mount type=volume,source=example-web-license,target=/var/lib/appguard \
+  example-web:001
 ```
 
-`build` refuses to overwrite a release or silently skip a configured checkpoint.
-Only `release-001/bundle` is a customer build input. `release.json` contains the
-content key and must never enter an image. The signing key is a raw private key
-in a mode-0600 file; use restricted publisher storage or extend signing with your
-KMS before operating a shared signing service.
+浏览器打开 `http://localhost:8000/_license/`，点击“下载授权申请”，将 `activation-request.json` 发给发行方。远程部署时把 `localhost` 替换为服务器地址。
 
-`issue` also performs renewal: issue a new file for the same deployment and build
-with a later expiry. Upgrading to a new build requires a new license for that build.
-Keep release records and the issuer key backed up. `inspect` displays unverified
-metadata only and must never be used as an authorization decision.
+授权目录必须可写且持久保存，重建容器时继续挂载同一个数据卷。应用需要的数据库初始化等操作仍由项目自己的部署流程完成。
 
-## Runtime and Renewal
+### 2. 发行方签发许可证
 
-The image compiles the runtime using `APPGUARD_PUBLIC_KEY` during wheel generation.
-This is a public trust anchor, not a secret or a runtime environment override.
-
-Runtime configuration:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `APPGUARD_BUNDLE` | `/opt/appguard/bundle` | Signed manifest and ciphertexts |
-| `APPGUARD_LICENSE_DIR` | `/var/lib/appguard` | Persistent identity, license and clock state |
-| `APPGUARD_APP_ROOT` | `/app` | Runtime tree; v1 compiles diagnostic filenames for `/app` |
-| `APPGUARD_SECURE_COOKIE` | `0` | Set `1` behind HTTPS for the activation cookie |
-
-Serve `appguard_host:create_host()` with a WSGI server. The activation page always
-remains available at `/_license/`, including after an expired-license restart.
-Download the activation request, have the publisher issue a license, and upload
-the file or paste its JSON/base64 form. Invalid candidates do not replace a valid
-license. Valid candidates are authenticated, tested against a module and atomically
-installed. Each process observes file changes and expiry at subsequent checks.
-
-The host does not run business schema migrations. Operators must explicitly run
-the product's initialization command after activation and before business use.
-The license directory must be writable by the runtime UID, since it persists a
-best-effort clock high-water mark as well as activation state.
-
-## Protection Scope and Limitations
-
-- The build injects native checks at explicitly configured function entries. It
-  does not discover all business paths automatically. Each newly added worker or
-  alternate entrypoint needs a coverage review. Ordinary source development is unchanged.
-- Business modules are encrypted, but their stubs and public templates remain
-  readable. Dependencies, indexes, prompts and already returned data are not protected
-  automatically. Reimplementing functionality using delivered data is outside scope.
-- Code objects and keys exist in process memory. Root, debuggers, monkeypatching
-  lower-level dependencies, a modified interpreter or native binary patching can
-  bypass or extract them. There is no bytecode VM, hardware attestation or anti-debugger.
-- Offline clock rollback detection has a 120-second tolerance and an advisory
-  persisted maximum time. Volume deletion, editing or whole-machine snapshot
-  restoration can bypass it. An extracted content key has no cryptographic expiry.
-- Copying both the deployment private key and its license clones the installation.
-  No strong hardware binding, offline revocation or global concurrency enforcement exists.
-- Already-running work is checked at configured entries and before forwarding
-  each response chunk. Expiry closes the iterable when control returns, invoking
-  existing cleanup. It does not forcibly interrupt blocked network I/O or arbitrary
-  Python threads at an exact deadline. Idle browser tabs do not navigate themselves.
-- Renewal does not guarantee monotonic license generations: an older, still-valid
-  signed license can be reinstalled. Build-scoped licenses prevent cross-build use,
-  not rollback to an older image and matching license.
-- This initial runtime targets CPython 3.11. Native wheels must match OS and CPU;
-  linux/amd64 is the verified target. ARM64 requires its own build and verification.
-- Public Python signatures and annotations are preserved for Flask/Pydantic.
-  Source inspection sees stubs, not original source; source-based tests and debugging
-  tools need adaptation. The software is not a drop-in protection tool for other languages.
-
-## Verification
+在 AppGuard 仓库根目录、已准备好的 Python 3.11 环境中运行。使用与交付镜像对应的发布记录，将 `--request` 换成收到的申请文件路径，并设置客户标识和到期时间：
 
 ```sh
-PYTHONPATH=. python -m pytest tests/test_build.py -q
+python -m appguard issue \
+  --release .data/releases/example-001/release.json \
+  --issuer-key .data/issuer.key \
+  --request activation-request.json \
+  --customer customer-001 --expires 2027-12-31T23:59:59Z \
+  --out .data/customer-001.license
 ```
 
-The medical-baike integration includes `backend/scripts/smoke_private_image.py`.
-It mounts publisher inputs only into a disposable test container, installs pytest
-there, tests license rejection/activation/native loading and runs existing business
-tests against the encrypted modules. These test mounts are never customer deployment
-instructions. External LLM/OCR calls are mocked; SQLite and generated KB fixtures
-provide isolated data. A real customer-model end-to-end test is a separate gate.
+把生成的 `customer-001.license` 交给部署方。签名私钥 `issuer.key` 和发布记录 `release.json` 由发行方备份留存，不放入交付包。
 
-`tools/verify_http.py` tests the real HTTP license boundary, temporarily installs
-an eight-second license, optionally restarts a named test container, and restores
-the supplied valid license. Run it only against an isolated test deployment.
-`tools/audit_image.py --image <tag> --out <report.json>` checks all exported image
-layers for plaintext business modules, publisher material and Git URL credentials;
-its temporary image archive is removed after inspection.
+### 3. 部署方导入激活
+
+在 `/_license/` 页面上传许可证并点击“激活授权”。状态变为“授权有效”后即可进入应用，无需重启。
+
+续期时由发行方更新到期时间，并为 `--out` 指定新的文件名，重新签发后在同一页面导入。换用新构建的应用版本后，需要重新下载申请并签发对应许可证。
+
+## 接入自己的项目
+
+Flask 项目在创建和配置 `app` 后注册插件，继续使用原有启动命令：
+
+```python
+from appguard_flask import AppGuard
+
+AppGuard().init_app(app)
+```
+
+其他 WSGI 项目包装其应用入口：
+
+```python
+from appguard_host import LicenseMiddleware
+
+application = LicenseMiddleware(application)
+```
+
+在 `guard.toml` 中选择交付文件和需要授权的函数。路径相对于构建命令的 `--source`：
+
+```toml
+product_id = "my-web-app"
+include = ["web_app.py", "service.py", "templates/", "static/"]
+exclude = ["**/__pycache__/", "**/.env*", "**/*.pyc"]
+
+[protected_functions]
+"service.py" = ["answer"]
+```
+
+`include` 支持文件、目录和通配符；Python 文件加密处理，其他文件原样复制。至少选择一个受保护函数，并排除私密配置和开发文件。应用创建、导入、数据库初始化时必须调用的函数不要设为受保护函数，以便未激活时也能启动授权页面。闭包和异步生成器暂不支持作为受保护函数。
+
+接入后的应用需要安装发行方为本次构建生成的 AppGuard 运行时；具体命令见[首次发行指南](docs/first-release.md)。代码加密不保证阻止拥有主机管理权限的人提取运行中的代码。
+
+## 常用配置
+
+| 环境变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `APPGUARD_BUNDLE` | `/opt/appguard/bundle` | 加密代码及发布清单目录 |
+| `APPGUARD_LICENSE_DIR` | `/var/lib/appguard` | 可写、持久化的授权目录 |
+| `APPGUARD_SECURE_COOKIE` | `0` | 使用 HTTPS 时设为 `1` |
+
+无法激活时，先查看 `/_license/` 的状态提示，确认许可证对应当前部署和版本、系统时间正确，以及授权目录可写。
