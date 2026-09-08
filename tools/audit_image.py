@@ -17,6 +17,7 @@ def main():
     image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
     problems = []
     protected = set()
+    protected_functions = set()
     layer_count = 0
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="image-audit-", dir=args.out.parent) as temp:
@@ -32,6 +33,8 @@ def main():
                         if not entry.isfile():
                             continue
                         name = entry.name.removeprefix("./").lstrip("/")
+                        if name.startswith("opt/appguard/bundle/functions/") and name.endswith(".agf"):
+                            protected_functions.add(name)
                         owned = name.startswith(("app/backend/app/", "app/backend/lib/", "app/backend/scripts/")) or name == "app/backend/web_app.py"
                         if owned and name.endswith((".pyc", ".pyo")):
                             problems.append("Unencrypted business bytecode: " + name)
@@ -42,7 +45,7 @@ def main():
                             protected.add(name)
                         if name in {"app/backend/pyproject.toml", "app/backend/uv.lock", "app/.env"} or name.startswith("app/.git/"):
                             problems.append("Private build input: " + name)
-                        if name.startswith(("app/", "opt/appguard/")) and Path(name).name in {"issuer.key", "release.json", "deployment.key", "license.json"}:
+                        if name.startswith(("app/", "opt/appguard/")) and Path(name).name in {"issuer.key", "release.json", "deployment.key", "license.json", "bootstrap.key"}:
                             problems.append("Private license material: " + name)
                         if "/site-packages/appguard/" in name:
                             problems.append("Publisher tooling: " + name)
@@ -54,6 +57,7 @@ def main():
     if not layer_count or not protected:
         problems.append("No image layers or protected modules inspected")
     result = {"image_id": image_id, "layers": layer_count, "protected_modules": len(protected),
+              "protected_functions": len(protected_functions),
               "passed": not problems, "problems": problems}
     args.out.write_text(json.dumps(result, indent=2))
     print(json.dumps(result))

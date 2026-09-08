@@ -1,17 +1,14 @@
-"""In-process WSGI license portal. Business modules load only with a valid license."""
+"""WSGI license middleware and enrollment CLI; the business owns its startup."""
 
 import argparse
 import base64
 import html
-import importlib
 import json
 import os
 import secrets
-import sys
 import threading
 import time
 from collections import deque
-from pathlib import Path
 
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.wrappers import Request, Response
@@ -64,9 +61,9 @@ class LicensedIterable:
                 close()
 
 
-class LicenseHost:
-    def __init__(self):
-        self.application = None
+class LicenseMiddleware:
+    def __init__(self, application):
+        self.application = application
         self.lock = threading.RLock()
         self.attempts = {}
         self.enrollment = runtime.enrollment()
@@ -172,32 +169,17 @@ input[type=file]{{max-width:100%;margin:8px 0 20px}}.error{{color:#ac233b}}a{{co
             else:
                 response = self._response({"error": "当前部署未获得有效授权", "code": str(exc)}, 403)
             return response(environ, start_response)
-        with self.lock:
-            if self.application is None:
-                spec = runtime.application_spec()
-                root = Path(os.environ.get("APPGUARD_APP_ROOT", "/app"))
-                sys.path.insert(0, str(root / spec["python_path"]))
-                module, attribute = spec["application"].split(":", 1)
-                self.application = getattr(importlib.import_module(module), attribute)
         return LicensedIterable(self.application(environ, start_response))
-
-
-def create_host():
-    return LicenseHost()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["enroll", "status", "serve"])
-    parser.add_argument("--port", type=int, default=5001)
+    parser.add_argument("command", choices=["enroll", "status"])
     args = parser.parse_args()
     if args.command == "enroll":
         print(json.dumps(runtime.enrollment()))
     elif args.command == "status":
         print(json.dumps(runtime.status()))
-    else:
-        from werkzeug.serving import run_simple
-        run_simple("0.0.0.0", args.port, create_host(), threaded=True)
 
 
 if __name__ == "__main__":

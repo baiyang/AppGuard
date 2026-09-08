@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--issuer-key", type=Path, required=True)
     parser.add_argument("--restore-license", type=Path, required=True)
     parser.add_argument("--restart-container")
+    parser.add_argument("--startup-timeout", type=float, default=180)
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     session = requests.Session()
@@ -43,6 +44,16 @@ def main():
         response = session.get(base + "/_license/status", timeout=10)
         response.raise_for_status()
         return response.json()
+
+    def wait_ready():
+        deadline = time.monotonic() + args.startup_timeout
+        while True:
+            try:
+                return status()
+            except requests.RequestException:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.5)
 
     def activate(raw):
         response = session.get(base + "/_license/", timeout=10)
@@ -57,6 +68,7 @@ def main():
 
     restore = args.restore_license.read_bytes()
     release = json.loads(args.release.read_text())
+    wait_ready()
     request = session.get(base + "/_license/request", timeout=10).json()
     assert (request["build_id"], request["product_id"]) == (release["build_id"], release["product_id"])
     try:
@@ -82,19 +94,12 @@ def main():
         results["expiry_blocks_pages_and_api"] = True
         if args.restart_container:
             subprocess.run(["docker", "restart", args.restart_container], check=True, capture_output=True, timeout=45)
-            deadline = time.monotonic() + 30
-            while True:
-                try:
-                    state = status()
-                    break
-                except requests.RequestException:
-                    if time.monotonic() >= deadline:
-                        raise
-                    time.sleep(0.5)
+            state = wait_ready()
             assert state["code"] == "LICENSE_EXPIRED"
             assert session.get(base + "/_license/", timeout=10).status_code == 200
             results["expired_restart_keeps_activation_available"] = True
     finally:
+        wait_ready()
         activate(restore)
         results["valid_license_restored"] = status()["valid"]
         args.out.parent.mkdir(parents=True, exist_ok=True)
