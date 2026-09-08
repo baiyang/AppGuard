@@ -1,0 +1,8 @@
+product_id = "example-web"
+include = ["web_app.py", "service.py", "cli.py"]
+
+[protected_functions]
+"service.py" = ["answer"]
+
+[checkpoints]
+"web_app.py" = ["check_license"]

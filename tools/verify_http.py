@@ -88,7 +88,7 @@ def main():
         assert status()["code"] == "LICENSE_EXPIRED"
         response = session.get(base + "/any-business-page", headers={"Accept": "text/html"}, allow_redirects=False, timeout=10)
         assert response.status_code == 302 and response.headers["Location"] == "/_license/"
-        response = session.post(base + "/api/query", json={}, timeout=10)
+        response = session.post(base + "/api/appguard-expiry-check", json={}, timeout=10)
         assert response.status_code == 403 and response.json()["code"] == "LICENSE_EXPIRED"
         assert "授权已到期" in session.get(base + "/_license/", timeout=10).text
         results["expiry_blocks_pages_and_api"] = True
