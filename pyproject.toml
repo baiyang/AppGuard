@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.45.1", "Cython==3.1.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appguard-runtime"
+version = "0.1.0"
+description = "Licensed encrypted module loader for CPython 3.11 deployments"
+requires-python = ">=3.11,<3.12"
+dependencies = ["cryptography==45.0.4", "werkzeug>=3.1,<4"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

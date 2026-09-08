@@ -1,0 +1,204 @@
+"""In-process WSGI license portal. Business modules load only with a valid license."""
+
+import argparse
+import base64
+import html
+import importlib
+import json
+import os
+import secrets
+import sys
+import threading
+import time
+from collections import deque
+from pathlib import Path
+
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.wrappers import Request, Response
+
+import guard_runtime as runtime
+
+
+STATUS_LABELS = {
+    "LICENSE_VALID": "授权有效",
+    "LICENSE_MISSING": "尚未激活",
+    "LICENSE_EXPIRED": "授权已到期",
+    "LICENSE_NOT_YET_VALID": "授权尚未生效",
+    "LICENSE_INVALID": "许可证无效",
+    "LICENSE_WRONG_PRODUCT_OR_BUILD": "许可证与当前产品或版本不匹配",
+    "LICENSE_WRONG_DEPLOYMENT": "许可证与当前部署不匹配",
+    "DEPLOYMENT_KEY_MISSING": "部署标识不可用",
+    "CLOCK_ROLLBACK": "系统时间异常",
+    "CLOCK_STATE_INVALID": "时间校验记录异常",
+    "LICENSE_STATE_UNWRITABLE": "授权状态无法保存",
+    "BUNDLE_INVALID": "业务包校验失败",
+}
+
+
+class LicensedIterable:
+    """Close the business response even when disconnected before first iteration."""
+
+    def __init__(self, iterable):
+        self.source = iterable
+        self.iterator = iter(iterable)
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            runtime.require_valid()
+            chunk = next(self.iterator)
+            runtime.require_valid()
+            return chunk
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            close = getattr(self.source, "close", None)
+            if close:
+                close()
+
+
+class LicenseHost:
+    def __init__(self):
+        self.application = None
+        self.lock = threading.RLock()
+        self.attempts = {}
+        self.enrollment = runtime.enrollment()
+
+    def _response(self, payload, status=200):
+        response = Response(json.dumps(payload, ensure_ascii=False), status=status, content_type="application/json")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def _page(self, error=""):
+        state = runtime.status()
+        token = secrets.token_urlsafe(32)
+        expiration = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(state["expires_at"] + 8 * 3600)) + "（北京时间）" if state["valid"] else "暂无有效授权"
+        state_label = STATUS_LABELS.get(state["code"], "授权状态异常")
+        request_fields = "".join(
+            f"<dt>{label}</dt><dd>{html.escape(self.enrollment[key])}</dd>"
+            for label, key in [("产品标识", "product_id"), ("发布版本", "build_id"), ("部署标识", "deployment_public")]
+        )
+        content = f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>产品授权</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#f6f8fa;color:#182323;font:15px system-ui,sans-serif;letter-spacing:0}}
+main{{max-width:680px;margin:40px auto;padding:24px}}header{{border-bottom:3px solid #12766b;padding-bottom:18px}}
+h1{{font-size:26px;margin:10px 0}}h2{{font-size:17px;margin:28px 0 10px}}p{{overflow-wrap:anywhere}}
+pre,textarea{{width:100%;padding:12px;border:1px solid #bbc9c6;background:white;border-radius:4px;white-space:pre-wrap;overflow-wrap:anywhere}}
+dl{{margin:0}}dt{{color:#596763;font-size:13px;margin-top:12px}}dd{{margin:4px 0 14px;overflow-wrap:anywhere;font:14px monospace}}
+textarea{{min-height:150px;resize:vertical;font:13px monospace}}label{{display:block;margin:14px 0 6px}}
+button{{background:#12766b;color:white;border:0;border-radius:4px;padding:12px 20px;font:inherit;cursor:pointer}}
+input[type=file]{{max-width:100%;margin:8px 0 20px}}.error{{color:#ac233b}}a{{color:#12695f}}
+@media(max-width:480px){{main{{margin:12px auto;padding:18px}}}}
+</style><main><header>AppGuard<h1>产品授权</h1></header>
+<p>授权状态：<strong>{state_label}</strong></p><p>到期时间：{expiration}</p>
+<p class="error" role="alert">{html.escape(error)}</p>
+<h2>部署信息</h2><dl>{request_fields}</dl><a href="/_license/request">下载授权申请</a>
+<h2>更新授权</h2><form action="/_license/activate" method="post" enctype="multipart/form-data">
+<input type="hidden" name="csrf" value="{token}">
+<label for="license">授权码</label><textarea id="license" name="license" spellcheck="false"></textarea>
+<label for="file">许可证文件</label><input id="file" type="file" name="file" accept=".json,.license,.lic">
+<div><button type="submit">激活授权</button></div></form><p><a href="/">进入系统</a></p></main></html>'''
+        response = Response(content, content_type="text/html; charset=utf-8")
+        response.set_cookie("appguard_csrf", token, httponly=True, samesite="Strict", path="/_license/",
+                            secure=os.environ.get("APPGUARD_SECURE_COOKIE", "0") == "1")
+        response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"})
+        return response
+
+    def _portal(self, request):
+        path = request.path
+        if path in {"/_license", "/_license/"} and request.method == "GET":
+            return self._page()
+        if path == "/_license/status" and request.method == "GET":
+            return self._response(runtime.status())
+        if path == "/_license/request" and request.method == "GET":
+            response = self._response(self.enrollment)
+            response.headers["Content-Disposition"] = 'attachment; filename="activation-request.json"'
+            return response
+        if path != "/_license/activate" or request.method != "POST":
+            return self._response({"error": "页面不存在"}, 404)
+        request.max_content_length = 100_000
+        try:
+            token = request.form.get("csrf", "")
+            cookie = request.cookies.get("appguard_csrf", "")
+            if not token or not cookie or not secrets.compare_digest(token, cookie):
+                return self._response({"error": "授权表单已失效，请刷新页面后重试"}, 403)
+            with self.lock:
+                now = time.monotonic()
+                if len(self.attempts) > 1024:
+                    self.attempts = {k: v for k, v in self.attempts.items() if v and v[-1] > now - 60}
+                attempts = self.attempts.setdefault(request.remote_addr, deque(maxlen=10))
+                while attempts and attempts[0] < now - 60:
+                    attempts.popleft()
+                if len(attempts) >= 10:
+                    return self._response({"error": "提交过于频繁，请稍后重试"}, 429)
+                attempts.append(now)
+            file = request.files.get("file")
+            raw = file.read(65537) if file and file.filename else request.form.get("license", "").strip().encode()
+            if raw and not raw.startswith(b"{"):
+                raw = base64.b64decode(raw, validate=True)
+            runtime.install_license(raw)
+        except RequestEntityTooLarge:
+            return self._response({"error": "许可证文件过大"}, 413)
+        except (ValueError, runtime.LicenseError):
+            response = self._page("许可证验证失败，请确认授权码完整、未过期，且适用于当前部署。")
+            response.status_code = 400
+            return response
+        return Response(status=303, headers={"Location": "/", "Cache-Control": "no-store"})
+
+    def __call__(self, environ, start_response):
+        request = Request(environ)
+        if request.path == "/_license" or request.path.startswith("/_license/"):
+            return self._portal(request)(environ, start_response)
+        try:
+            runtime.require_valid()
+        except runtime.LicenseError as exc:
+            accept = request.headers.get("Accept", "")
+            is_api = request.path.startswith(("/api/", "/admin/api/", "/v1/"))
+            is_page = request.method in {"GET", "HEAD"} and (
+                request.headers.get("Sec-Fetch-Dest") == "document"
+                or ("text/html" in accept and request.accept_mimetypes["text/html"] > 0)
+                or (not accept and not is_api))
+            if is_page:
+                response = Response(status=302, headers={"Location": "/_license/", "Cache-Control": "no-store"})
+            else:
+                response = self._response({"error": "当前部署未获得有效授权", "code": str(exc)}, 403)
+            return response(environ, start_response)
+        with self.lock:
+            if self.application is None:
+                spec = runtime.application_spec()
+                root = Path(os.environ.get("APPGUARD_APP_ROOT", "/app"))
+                sys.path.insert(0, str(root / spec["python_path"]))
+                module, attribute = spec["application"].split(":", 1)
+                self.application = getattr(importlib.import_module(module), attribute)
+        return LicensedIterable(self.application(environ, start_response))
+
+
+def create_host():
+    return LicenseHost()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["enroll", "status", "serve"])
+    parser.add_argument("--port", type=int, default=5001)
+    args = parser.parse_args()
+    if args.command == "enroll":
+        print(json.dumps(runtime.enrollment()))
+    elif args.command == "status":
+        print(json.dumps(runtime.status()))
+    else:
+        from werkzeug.serving import run_simple
+        run_simple("0.0.0.0", args.port, create_host(), threaded=True)
+
+
+if __name__ == "__main__":
+    main()
