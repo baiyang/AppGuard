@@ -1,2 +1,3 @@
 product_id = "example-web"
-include = ["web_app.py", "service.py", "cli.py"]
+include = ["src/", "scripts/cli.py"]
+exclude = ["**/__pycache__/", "**/*.pyc", "**/.env*"]

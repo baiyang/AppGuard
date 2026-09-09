@@ -11,25 +11,54 @@ python3.11 -m pip install appguard-runtime==0.0.1
 appguard --help
 ```
 
-PyPI 上的 `appguard-runtime` 是发行方工具包，包含密钥生成、模块加密、许可证签发和原生运行时编译模板。它不包含任何产品密钥，也不直接安装客户侧的 `guard_runtime`、`appguard_host` 或 `appguard_flask`。所有命令也可通过 `python -m appguard` 调用。
+PyPI 上的 `appguard-runtime` 是发行方工具包，包含密钥生成、模块加密、许可证签发和原生运行时编译模板。它不包含任何产品密钥，也不直接安装客户侧的 `guard_runtime`、`appguard_host` 或 `appguard_flask`。`appguard` 的所有子命令也可通过 `python -m appguard` 调用。
 
-为产品生成一次密钥，然后在与目标部署相同的系统、CPU 架构和 CPython 3.11 环境中编译客户运行时（需要 C 编译器和 Python 开发头文件）：
+为产品生成一次密钥：
 
 ```sh
 appguard keygen --out .data/issuer.key
-appguard code-keygen --out .data/code.key
-appguard build-runtime --public-key .data/issuer.pub \
-  --code-key .data/code.key --out .data/runtime
+appguard code-keygen --out .data/products/example-web/code.key
 ```
 
-生成的 `appguard_product_runtime-0.0.1-*.whl` 包含客户侧插件和编入产品密钥的原生模块，仅随对应产品私下交付，不能上传到公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.1-*.whl` 安装；不同产品应使用各自独立的容器或虚拟环境。应用加密和完整镜像交付步骤见[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)。
+然后按[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)直接构建镜像。示例 Dockerfile 从 PyPI 安装固定版本 `appguard-runtime==0.0.1`，加密源码、编译产品运行时并组装交付镜像，可直接复制到自己的项目使用。构建无需 AppGuard 仓库源码，宿主机无需预先生成加密包，也无需安装 C 编译器。密钥通过 BuildKit secrets 传入，最终镜像只包含运行依赖、产品运行时和加密应用。
+
+后续发布复用密钥，重新执行镜像构建即可。每次构建都需保留指南中的 `--no-cache-filter protected-build`，确保加密和编译使用当前密钥。自行管理非 Docker 部署时，指南也提供独立构建加密包和私有运行时 wheel 的命令；不同产品应使用各自独立的容器或虚拟环境。
 
 ## 从这里开始
 
+- **从示例源码构建并试用**：按 [Flask 示例](https://github.com/baiyang/AppGuard/blob/main/examples/flask/README.md)依次准备环境、生成密钥、执行 Docker 构建并启动验证。
 - **第一次制作交付包**：按[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)完成打包、测试和交付。
 - **已收到交付包**：按[示例部署说明](https://github.com/baiyang/AppGuard/blob/main/examples/flask/DEPLOY.md)启动应用并导入许可证。
 - **接入自己的后端**：参考下方接入配置；密钥保存与轮换见[密钥说明](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md)。
+- **了解许可证内容和交付方式**：见[许可证格式](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md#license-format)和 [Base64 交付步骤](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md#base64-delivery)。
 - **维护 AppGuard 版本**：见[版本与发布流程](https://github.com/baiyang/AppGuard/blob/main/docs/releases.md)。
+
+## 命令总览
+
+发行方安装公共包 `appguard-runtime` 后使用 `appguard`；部署端的 `appguard_host` 由产品专用运行时提供，示例镜像已安装。每条命令的完整参数、输入输出和使用示例见[命令参考](https://github.com/baiyang/AppGuard/blob/main/docs/cli.md)。
+
+| 命令 | 在哪里执行 | 用途 |
+| --- | --- | --- |
+| `appguard keygen` | 发行方 | 生成签名私钥和对应公钥，首次准备时执行 |
+| `appguard code-keygen` | 发行方 | 为产品生成代码加密密钥，后续构建复用 |
+| `appguard build` | 发行方或 Docker 构建阶段 | 按 `guard.toml` 加密 Python 模块并签署清单 |
+| `appguard build-runtime` | 发行方或 Docker 构建阶段 | 使用产品密钥编译部署端的原生运行时 wheel |
+| `appguard issue` | 发行方 | 签发产品许可证，续期时指定新到期时间重新签发 |
+| `appguard inspect` | 发行方 | 查看许可证或清单的元数据，不验证签名 |
+| `python -m appguard_host status` | 应用容器或部署环境 | 查看当前产品的授权状态 |
+| `python -m appguard_host install` | 应用容器或部署环境 | 导入许可证，激活或续期，无需重启 |
+
+先生成一次密钥，再构建产品，最后签发并导入许可证。使用示例 Dockerfile 时，`build` 和 `build-runtime` 已在镜像构建期间自动执行。
+
+在终端查看帮助：
+
+```sh
+appguard --help
+appguard issue --help
+python -m appguard --help
+```
+
+将 `issue` 换成其他子命令名即可查看相应参数。`appguard ...` 也可写成 `python -m appguard ...`，请使用已安装工具包的 Python 环境。
 
 ## 架构与边界
 
@@ -61,7 +90,7 @@ flowchart TB
     issue -.->|"离线交付许可证"| license
 ```
 
-系统只维护三种长期密钥值：发行方签名私钥 `issuer.key`、对应验签公钥 `issuer.pub`、每产品固定的代码密钥 `code.key`。公钥和代码密钥编入运行时；签名私钥不交付。普通应用更新复用产品代码密钥和运行时，无需重新签发未到期的产品许可证。
+系统只维护三种长期密钥值：发行方签名私钥 `issuer.key`、对应验签公钥 `issuer.pub`、每产品固定的代码密钥 `code.key`。公钥和代码密钥编入运行时；签名私钥不交付。普通应用更新复用产品代码密钥，无需重新签发未到期的产品许可证。
 
 - **代码保护**：构建端用 `compile` / `marshal` 生成整模块字节码，再用 AES-GCM 加密为 `.agc`。镜像内的 `.py` 仅为加载入口；运行时验签、解密后在内存执行，不将明文字节码写回磁盘。
 - **后端授权**：中间件在每个业务请求进入应用之前验签并检查有效期。未授权、过期或许可证无效时，所有业务路径统一返回 **HTTP 403 JSON**，不依据 `Accept`、路径前缀或浏览器类型重定向。
@@ -96,11 +125,13 @@ application = LicenseMiddleware(application)
 
 ```toml
 product_id = "my-web-app"
-include = ["web_app.py", "service.py", "templates/", "static/"]
+include = ["src/", "scripts/cli.py", "templates/", "static/"]
 exclude = ["**/__pycache__/", "**/.env*", "**/*.pyc"]
 ```
 
-路径相对于 `build --source`，支持文件、目录和通配符。选中的 Python 模块整体加密；非 Python 文件原样复制，需排除私密配置、开发文件和生成的 C 源文件。依赖安装、数据库初始化及后台任务仍由业务项目自己的部署流程负责。
+路径相对于应用项目根目录，即 Docker 构建的 `application` 上下文或独立命令的 `build --source`，支持文件、目录和通配符；按自己的项目实际文件调整选择范围。选中的 Python 模块整体加密；非 Python 文件原样复制，需排除私密配置、开发文件和生成的 C 源文件。
+
+[Flask 示例](https://github.com/baiyang/AppGuard/blob/main/examples/flask/README.md)采用 `src/example_web/` 业务包和 `scripts/` 脚本目录。其配置只交付 `src/` 和业务命令 `scripts/cli.py`，构建、验证脚本不进入镜像。加密后保留目录结构，Dockerfile 通过 `PYTHONPATH=/app/src` 加载业务包，以 `example_web.web_app:app` 启动 Gunicorn，并从项目根目录的 `requirements.txt` 安装依赖。系统依赖、数据库初始化及后台任务仍由业务项目自己的部署流程负责。
 
 ## 签发、激活与续期
 
@@ -113,11 +144,30 @@ python -m appguard issue \
   --out .data/customer-001.license
 ```
 
-客户在 `http://服务器地址:8000/_license/` 上传许可证。授权有效后，示例的 `/api/answer?value=8` 返回 `{"answer":50}`。缺失或过期授权时，该接口及其他业务路径均返回 403 JSON。
+`issue` 输出原始签名 JSON，发行方留存该文件供检查和命令行导入。交付前，将整个文件编码为单行 Base64：
+
+```sh
+python - <<'PY'
+import base64
+from pathlib import Path
+
+source = Path(".data/customer-001.license")
+target = Path(".data/delivery/customer-001.b64.license")
+encoded = base64.b64encode(source.read_bytes()).decode("ascii")
+target.parent.mkdir(parents=True, exist_ok=True)
+with target.open("x", encoding="ascii") as output:
+    output.write(encoded + "\n")
+print(target)
+PY
+```
+
+把 `.data/delivery/customer-001.b64.license` 交给客户。客户在电脑浏览器中打开 `http://服务器地址:8000/_license/`，在“许可证文件”处选择收到的文件，点击“激活授权”；也可将文件的完整单行内容粘贴到“授权码”输入框。Base64 是可逆编码，不提供保密性；许可证由数字签名防篡改，详见[许可证格式与校验](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md#license-format)。
+
+授权有效后，示例的 `/api/answer?value=8` 返回 `{"answer":50}`。缺失或过期授权时，该接口及其他业务路径均返回 403 JSON。
 
 续期时指定新的到期时间和输出文件，重新签发后导入即可。相同发行方和产品的新构建继续使用原有效许可证；不需要保存每个构建的秘密 `release.json`。授权卷只保存许可证和辅助时钟记录，重建容器时继续挂载。
 
-部署端也可使用命令行查看或导入授权：
+部署端也可使用命令行查看或导入授权。`install` 仅接受 `issue` 生成的原始签名 JSON；只有 Base64 交付文件时，先按[解码步骤](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md#base64-delivery)恢复原始文件：
 
 ```sh
 python -m appguard_host status

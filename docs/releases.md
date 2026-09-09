@@ -66,7 +66,7 @@ python tools/check_release.py --ref refs/tags/v0.0.1
 python -m build
 python -m twine check --strict dist/*
 python tools/verify_package.py dist/*.whl dist/*.tar.gz
-python -m tools.verify_delivery --image appguard-ci:local --out .data/ci-delivery.json
+python examples/flask/scripts/verify_delivery.py --image appguard-ci:local --out .data/ci-delivery.json
 ```
 
 Docker 检查需要已运行的 Docker 与 Buildx。发布后可用

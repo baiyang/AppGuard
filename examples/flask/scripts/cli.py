@@ -1,6 +1,6 @@
 import argparse
 
-from service import answer
+from example_web.service import answer
 
 
 def main():

@@ -83,6 +83,25 @@ def test_bundle_is_encrypted_signed_and_contains_no_keys(project, tmp_path):
             assert private.read_text().encode() not in path.read_bytes()
 
 
+def test_flask_example_preserves_src_layout_and_excludes_build_scripts(project, tmp_path):
+    _, _, private, _, code_key = project
+    example = Path(__file__).resolve().parents[1] / "examples" / "flask"
+    output = tmp_path / "example-release"
+    result = build(example, example / "guard.toml", private, output, code_key)
+    expected = {
+        "src/example_web/__init__.py",
+        "src/example_web/web_app.py",
+        "src/example_web/service.py",
+        "scripts/cli.py",
+    }
+    tree = output / "bundle" / "tree"
+    assert result["modules"] == len(expected)
+    assert set(read_manifest(output)["modules"]) == expected
+    assert {path.relative_to(tree).as_posix() for path in tree.rglob("*") if path.is_file()} == expected
+    for relative in expected:
+        assert decrypt_module(output, code_key, relative).co_filename == "/app/" + relative
+
+
 def test_code_key_is_reused_across_builds_with_fresh_nonces(project, tmp_path):
     source, config, private, _, code_key = project
     first, second = tmp_path / "first", tmp_path / "second"
