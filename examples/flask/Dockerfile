@@ -4,8 +4,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY pyproject.toml setup.py appguard_host.py appguard_flask.py ./
-COPY runtime/guard_runtime.pyx runtime/guard_runtime.pyx
+COPY pyproject.toml /appguard-project.toml
+COPY appguard/_runtime/ ./
 # Build secrets do not invalidate Docker's cache; key digests do.
 ARG APPGUARD_PUBLIC_KEY_SHA256
 ARG APPGUARD_CODE_KEY_SHA256
@@ -17,6 +17,7 @@ RUN --mount=type=secret,id=publisher_public,required=true \
     && test "$(sha256sum /run/secrets/code_key | cut -d ' ' -f 1)" = "$APPGUARD_CODE_KEY_SHA256" \
     && APPGUARD_PUBLIC_KEY="$(cat /run/secrets/publisher_public)" \
     APPGUARD_CODE_KEY="$(cat /run/secrets/code_key)" \
+    APPGUARD_VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("/appguard-project.toml").read_text())["project"]["version"])')" \
     python -m pip wheel . --no-deps --wheel-dir /wheels
 
 FROM python:3.11-slim AS dependencies

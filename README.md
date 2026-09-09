@@ -4,11 +4,32 @@
 
 当前支持 **CPython 3.11**，提供 **Flask 插件和 WSGI 中间件**。ASGI 需要另行适配；运行环境的系统、CPU 架构和 Python 版本必须与原生运行时匹配。
 
+## 安装
+
+```sh
+python3.11 -m pip install appguard-runtime==0.0.1
+appguard --help
+```
+
+PyPI 上的 `appguard-runtime` 是发行方工具包，包含密钥生成、模块加密、许可证签发和原生运行时编译模板。它不包含任何产品密钥，也不直接安装客户侧的 `guard_runtime`、`appguard_host` 或 `appguard_flask`。所有命令也可通过 `python -m appguard` 调用。
+
+为产品生成一次密钥，然后在与目标部署相同的系统、CPU 架构和 CPython 3.11 环境中编译客户运行时（需要 C 编译器和 Python 开发头文件）：
+
+```sh
+appguard keygen --out .data/issuer.key
+appguard code-keygen --out .data/code.key
+appguard build-runtime --public-key .data/issuer.pub \
+  --code-key .data/code.key --out .data/runtime
+```
+
+生成的 `appguard_product_runtime-0.0.1-*.whl` 包含客户侧插件和编入产品密钥的原生模块，仅随对应产品私下交付，不能上传到公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.1-*.whl` 安装；不同产品应使用各自独立的容器或虚拟环境。应用加密和完整镜像交付步骤见[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)。
+
 ## 从这里开始
 
-- **第一次制作交付包**：按[首次发行指南](docs/first-release.md)完成打包、测试和交付。
-- **已收到交付包**：按[示例部署说明](examples/flask/DEPLOY.md)启动应用并导入许可证。
-- **接入自己的后端**：参考下方接入配置；密钥保存与轮换见[密钥说明](docs/keys.md)。
+- **第一次制作交付包**：按[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)完成打包、测试和交付。
+- **已收到交付包**：按[示例部署说明](https://github.com/baiyang/AppGuard/blob/main/examples/flask/DEPLOY.md)启动应用并导入许可证。
+- **接入自己的后端**：参考下方接入配置；密钥保存与轮换见[密钥说明](https://github.com/baiyang/AppGuard/blob/main/docs/keys.md)。
+- **维护 AppGuard 版本**：见[版本与发布流程](https://github.com/baiyang/AppGuard/blob/main/docs/releases.md)。
 
 ## 架构与边界
 
@@ -113,4 +134,4 @@ python -m appguard_host install /path/to/customer-001.license
 
 无法激活时查看 `/_license/` 的状态提示，确认许可证产品、发行方、有效期与系统时间。运行时需与产品代码密钥匹配，但不要求每次业务构建重新编译。
 
-旧版 `function-bodies-v1` 包和绑定 `build_id` 的许可证不能直接用于新版。首次迁移需要移除旧函数配置、生成产品代码密钥、重新构建镜像，并重新签发产品许可证。此后普通更新可复用许可证；迁移细节见[首次发行指南](docs/first-release.md#从旧版迁移)。
+旧版 `function-bodies-v1` 包和绑定 `build_id` 的许可证不能直接用于新版。首次迁移需要移除旧函数配置、生成产品代码密钥、重新构建镜像，并重新签发产品许可证。此后普通更新可复用许可证；迁移细节见[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md#从旧版迁移)。

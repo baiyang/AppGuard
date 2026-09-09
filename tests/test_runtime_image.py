@@ -10,15 +10,16 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from appguard.build import build
 from appguard.crypto import signed
+from appguard.runtime import build_runtime
 
 
-ROOT = Path(__file__).resolve().parents[1]
 PRODUCT = "runtime-test-product"
 SERVICE = '''
 def answer(value):
@@ -102,20 +103,12 @@ def make_artifact(publisher, name, code_key=None, native=None):
     metadata = build(publisher["source"], publisher["config"], publisher["issuer_path"],
                      release, code_key_path)
     if native is None:
-        compiler = directory / "compiler"
-        compiler.mkdir()
-        for filename in ("setup.py", "pyproject.toml", "appguard_host.py", "appguard_flask.py"):
-            shutil.copy2(ROOT / filename, compiler / filename)
-        shutil.copytree(ROOT / "runtime", compiler / "runtime", ignore=shutil.ignore_patterns("*.c", "*.so"))
+        public_key_path = directory / "issuer.pub"
+        public_key_path.write_text(publisher["issuer"].public_key().public_bytes_raw().hex())
+        result = build_runtime(public_key_path, code_key_path, directory / "wheels", isolation=False)
         native = directory / "native"
-        env = dict(os.environ,
-                   APPGUARD_PUBLIC_KEY=publisher["issuer"].public_key().public_bytes_raw().hex(),
-                   APPGUARD_CODE_KEY=code_key.hex())
-        result = subprocess.run(
-            [sys.executable, "setup.py", "build_ext", "--build-lib", str(native)],
-            cwd=compiler, env=env, capture_output=True, text=True, timeout=180,
-        )
-        assert result.returncode == 0, result.stdout[-5000:] + result.stderr[-10000:]
+        with ZipFile(result["wheel"]) as wheel:
+            wheel.extractall(native)
         assert list(native.glob("guard_runtime*")), "Native extension was not produced"
     return {"bundle": release / "bundle", "native": native,
             "code_key": code_key, "metadata": metadata}
@@ -144,7 +137,7 @@ def deployment(tmp_path, publisher, artifact):
                APPGUARD_LICENSE_DIR=str(license_dir),
                APPGUARD_BUNDLE=str(artifact["bundle"]),
                PYTHONDONTWRITEBYTECODE="1",
-               PYTHONPATH=os.pathsep.join(map(str, [artifact["native"], ROOT,
+               PYTHONPATH=os.pathsep.join(map(str, [artifact["native"],
                                                    artifact["bundle"] / "tree"])))
     return {"env": env, "cwd": tmp_path, "publisher": publisher, "artifact": artifact,
             "license_dir": license_dir}
@@ -181,7 +174,7 @@ def store(deployment, data):
 
 def with_artifact(deployment, artifact):
     env = dict(deployment["env"], APPGUARD_BUNDLE=str(artifact["bundle"]),
-               PYTHONPATH=os.pathsep.join(map(str, [artifact["native"], ROOT,
+               PYTHONPATH=os.pathsep.join(map(str, [artifact["native"],
                                                    artifact["bundle"] / "tree"])))
     return dict(deployment, env=env, artifact=artifact)
 

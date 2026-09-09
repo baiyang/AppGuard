@@ -9,13 +9,15 @@ git clone https://github.com/baiyang/AppGuard.git
 cd AppGuard
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install cryptography==45.0.4
+python -m pip install appguard-runtime==0.0.1
 mkdir -p .data/releases .data/delivery
 python -m appguard keygen --out .data/issuer.key
 python -m appguard code-keygen --out .data/products/example-web/code.key
 ```
 
 已有仓库可跳过克隆。签名密钥只生成一次，每个产品的代码密钥也只生成一次，后续普通发布继续使用；上述生成命令不会覆盖已有密钥。三种密钥的区别见[密钥说明](keys.md)。
+
+仅使用自己的项目时无需克隆仓库，安装 PyPI 工具包即可运行 `appguard`；本指南克隆仓库是为了取得 Flask 示例、Dockerfile 和镜像审计工具。开发仓库内尚未发布的修改时，改为 `python -m pip install -e '.[test]'`。
 
 示例包含 `web_app.py`、业务模块 `service.py`、独立命令行 `cli.py`、依赖清单及 `guard.toml`。三个 Python 模块整体加密；授权入口只限制 Web 业务请求，CLI 不检查许可证。
 
@@ -39,6 +41,16 @@ python -m appguard build \
 | `.data/releases/example-001/bundle/` | 制作镜像的输入，不含独立密钥文件 |
 
 ## 3. 制作并检查镜像
+
+示例 Dockerfile 会从 `appguard/_runtime/` 编译私有的 `appguard-product-runtime` wheel，再安装到客户镜像中。若自行管理部署，也可直接从已安装的 PyPI 工具包编译：
+
+```sh
+appguard build-runtime --public-key .data/issuer.pub \
+  --code-key .data/products/example-web/code.key \
+  --out .data/runtime/example-web
+```
+
+此命令需要 C 编译器和 Python 3.11 开发头文件，构建隔离环境会下载固定版本的 Cython、setuptools 和 wheel。输出目录必须尚不存在；wheel 只适用于构建时的系统、架构和 CPython 版本，并包含产品代码密钥，因此只应随对应产品私下交付，不能上传公共包仓库。客户只需安装 wheel，无需编译器。
 
 ```sh
 APPGUARD_PUBLIC_KEY_SHA256="$(python -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path(".data/issuer.pub").read_bytes()).hexdigest())')"
@@ -79,12 +91,11 @@ python -m appguard issue \
 在仓库根目录、已激活的 Python 3.11 虚拟环境中，补齐测试与原生编译依赖。版本约束与项目和示例保持一致：
 
 ```sh
-python -m pip install pytest Cython==3.1.2 setuptools==80.9.0 wheel==0.45.1 \
-  "werkzeug>=3.1,<4" "Flask>=3.1,<4" requests
+python -m pip install -e '.[test]'
 python -m pytest -q
 ```
 
-前面的准备步骤已安装 `cryptography==45.0.4`。测试会在临时目录生成测试密钥、加密示例并编译原生运行时，不需要 Docker，也不读取已有客户授权。开发机需有可用的 C 编译器和 Python 3.11 开发头文件。
+测试会在临时目录生成测试密钥、加密示例并编译原生运行时，不需要 Docker，也不读取已有客户授权。开发机需有可用的 C 编译器和 Python 3.11 开发头文件。
 
 对已启动的示例测试容器，再运行真实 HTTP 验证：
 

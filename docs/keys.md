@@ -102,7 +102,7 @@ BuildKit secret 本身不影响缓存。普通发布只换 bundle，可以复用
 | 生成密钥、构建入口、签发许可证 | [`appguard/__main__.py`](../appguard/__main__.py) |
 | 签名和密钥文件处理 | [`appguard/crypto.py`](../appguard/crypto.py) |
 | 整模块编译、加密、签署清单 | [`appguard/build.py`](../appguard/build.py) |
-| 编译内置公钥及产品代码密钥 | [`setup.py`](../setup.py)、[示例 Dockerfile](../examples/flask/Dockerfile) |
-| 清单验签、模块解密、许可证与时钟校验 | [`runtime/guard_runtime.pyx`](../runtime/guard_runtime.pyx) |
-| 后端统一授权入口、授权页面和部署 CLI | [`appguard_host.py`](../appguard_host.py)、[`appguard_flask.py`](../appguard_flask.py) |
+| 编译内置公钥及产品代码密钥 | [`appguard/_runtime/setup.py`](../appguard/_runtime/setup.py)、[示例 Dockerfile](../examples/flask/Dockerfile) |
+| 清单验签、模块解密、许可证与时钟校验 | [`appguard/_runtime/guard_runtime.pyx`](../appguard/_runtime/guard_runtime.pyx) |
+| 后端统一授权入口、授权页面和部署 CLI | [`appguard/_runtime/appguard_host.py`](../appguard/_runtime/appguard_host.py)、[`appguard/_runtime/appguard_flask.py`](../appguard/_runtime/appguard_flask.py) |
 | 交付镜像全部层中的源码和已知秘密检查 | [`tools/audit_image.py`](../tools/audit_image.py) |

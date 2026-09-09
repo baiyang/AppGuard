@@ -1,0 +1,16 @@
+include README.md
+include CHANGELOG.md
+include LICENSE
+include appguard/_runtime/LICENSE
+include appguard/_runtime/pyproject.toml
+include appguard/_runtime/setup.py
+include appguard/_runtime/guard_runtime.pyx
+include appguard/_runtime/appguard_host.py
+include appguard/_runtime/appguard_flask.py
+recursive-include tests *.py
+recursive-include tools *.py
+recursive-include docs *.md
+recursive-include examples *.py *.toml *.txt *.md Dockerfile
+global-exclude *.pyc *.pyo *.so *.pyd *.c *.key *.pub *.license
+prune .data
+prune .github

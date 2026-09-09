@@ -1,13 +1,50 @@
 [build-system]
-requires = ["setuptools==80.9.0", "wheel==0.45.1", "Cython==3.1.2"]
+requires = ["setuptools==80.9.0", "wheel==0.45.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "appguard-runtime"
-version = "0.3.0"
-description = "Encrypted Python modules and offline product licensing for backend APIs"
+version = "0.0.1"
+description = "Publisher tools for encrypted Python modules and offline product licensing"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.12"
-dependencies = ["cryptography==45.0.4", "werkzeug>=3.1,<4"]
+dependencies = ["cryptography==45.0.4", "build>=1.2.2,<2"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Security :: Cryptography",
+]
+
+[project.urls]
+Homepage = "https://github.com/baiyang/AppGuard"
+Repository = "https://github.com/baiyang/AppGuard"
+Issues = "https://github.com/baiyang/AppGuard/issues"
+Documentation = "https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md"
+
+[project.scripts]
+appguard = "appguard.__main__:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8,<10",
+    "Cython==3.1.2",
+    "setuptools==80.9.0",
+    "wheel==0.45.1",
+    "Flask>=3.1,<4",
+    "requests>=2.32,<3",
+]
+
+[tool.setuptools]
+packages = ["appguard"]
+include-package-data = false
+
+[tool.setuptools.package-data]
+appguard = ["_runtime/*.py", "_runtime/*.pyx", "_runtime/pyproject.toml", "_runtime/LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

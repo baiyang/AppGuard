@@ -1,4 +1,4 @@
-"""Publisher CLI: python -m appguard {keygen,code-keygen,build,issue,inspect}."""
+"""Publisher CLI for encrypted Python applications and offline licensing."""
 
 import argparse
 import base64
@@ -13,6 +13,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from .build import build
 from .crypto import private_write, product_id, signed, signer
+from .runtime import build_runtime
 
 
 def timestamp(value: str) -> int:
@@ -35,6 +36,9 @@ def main():
     keys.add_argument("--out", type=Path, required=True)
     code_keys = sub.add_parser("code-keygen", help="Generate a product AES-256 code key")
     code_keys.add_argument("--out", type=Path, required=True)
+    runtime = sub.add_parser("build-runtime", help="Compile a private product runtime wheel (requires a C compiler)")
+    for name in ("public-key", "code-key", "out"):
+        runtime.add_argument("--" + name, type=Path, required=True)
     package = sub.add_parser("build", help="Encrypt Python modules using a product code key")
     for name in ("source", "config", "issuer-key", "code-key", "out"):
         package.add_argument("--" + name, type=Path, required=True)
@@ -68,6 +72,8 @@ def main():
             print(json.dumps({"code_key": str(args.out)}))
         elif args.command == "build":
             print(json.dumps(build(args.source, args.config, args.issuer_key, args.out, args.code_key)))
+        elif args.command == "build-runtime":
+            print(json.dumps(build_runtime(args.public_key, args.code_key, args.out)))
         elif args.command == "issue":
             product = product_id(args.product)
             if (not args.customer or args.customer != args.customer.strip() or len(args.customer) > 512
@@ -97,7 +103,7 @@ def main():
                 raise ValueError("Expected an object payload")
             payload.pop("modules", None)
             print(json.dumps({"verified": False, "metadata": payload}, indent=2))
-    except (ValueError, OSError, KeyError, SyntaxError) as exc:
+    except (ValueError, OSError, KeyError, SyntaxError, RuntimeError) as exc:
         parser.exit(1, f"AppGuard: {exc}\n")
 
 
