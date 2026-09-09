@@ -1,15 +1,11 @@
-"""Versioned, signed envelopes and deployment-specific content key wrapping."""
+"""Signed envelopes and publisher-managed product keys."""
 
 import base64
 import json
 import os
 from pathlib import Path
 
-from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 
 def encode(value: bytes) -> str:
@@ -27,22 +23,23 @@ def private_write(path: Path, data: bytes) -> None:
 
 
 def signer(path: Path) -> Ed25519PrivateKey:
-    return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(path.read_text().strip()))
+    return Ed25519PrivateKey.from_private_bytes(read_key(path))
+
+
+def read_key(path: Path) -> bytes:
+    value = path.read_text(encoding="ascii").strip()
+    if len(value) != 64 or any(character not in "0123456789abcdefABCDEF" for character in value):
+        raise ValueError(f"Expected a 32-byte hexadecimal key: {path}")
+    return bytes.fromhex(value)
+
+
+def product_id(value: str) -> str:
+    if (not isinstance(value, str) or not value or value != value.strip()
+            or len(value) > 128 or any(ord(character) < 32 or ord(character) == 127 for character in value)):
+        raise ValueError("product_id must be a nonempty string of at most 128 characters without surrounding whitespace or control characters")
+    return value
 
 
 def signed(value, key: Ed25519PrivateKey) -> bytes:
     payload = canonical(value)
     return canonical({"payload": encode(payload), "signature": encode(key.sign(payload))})
-
-
-def wrap_key(content_key: bytes, deployment_public: str, build_id: str) -> dict:
-    ephemeral = X25519PrivateKey.generate()
-    recipient = X25519PublicKey.from_public_bytes(bytes.fromhex(deployment_public))
-    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
-               info=b"appguard-wrap-v1").derive(ephemeral.exchange(recipient))
-    nonce = os.urandom(12)
-    return {
-        "ephemeral_public": ephemeral.public_key().public_bytes_raw().hex(),
-        "nonce": encode(nonce),
-        "ciphertext": encode(AESGCM(key).encrypt(nonce, content_key, build_id.encode())),
-    }

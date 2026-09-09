@@ -1,67 +1,59 @@
 # AppGuard
 
-为 Python Web 项目提供代码加密交付和离线授权。发行方打包应用，部署方启动后申请许可证，导入许可证即可使用受保护功能。
+为 Python Web 项目提供整模块代码加密交付和离线产品授权。发行方交付镜像与许可证，客户导入许可证后即可使用后端接口。代码保护与授权判断独立，不需要额外部署授权服务器。
 
-当前支持 **CPython 3.11**，提供 **Flask 插件和 WSGI 中间件**。其他 WSGI 项目可以接入中间件；ASGI 项目需要另外适配。运行环境的系统、CPU 架构和 Python 版本必须与构建产物匹配。
+当前支持 **CPython 3.11**，提供 **Flask 插件和 WSGI 中间件**。ASGI 需要另行适配；运行环境的系统、CPU 架构和 Python 版本必须与原生运行时匹配。
 
 ## 从这里开始
 
-- **第一次制作交付包**：按[首次发行指南](docs/first-release.md)运行内置 Flask 示例，完成打包、部署和授权。
-- **已收到交付包**：按发行方提供的部署说明启动应用，再按下方步骤激活。[示例部署说明](examples/flask/DEPLOY.md)可随镜像一起交付。
-- **接入自己的项目**：参考下方接入配置，再使用首次发行指南中的打包步骤。
+- **第一次制作交付包**：按[首次发行指南](docs/first-release.md)完成打包、测试和交付。
+- **已收到交付包**：按[示例部署说明](examples/flask/DEPLOY.md)启动应用并导入许可证。
+- **接入自己的后端**：参考下方接入配置；密钥保存与轮换见[密钥说明](docs/keys.md)。
 
-## 首次部署与激活
+## 架构与边界
 
-流程：**发行方交付应用 → 部署方启动并下载授权申请 → 发行方签发许可证 → 部署方导入激活**。部署环境无需联网验证授权。
-
-发行方需要提供：
-
-| 文件 | 提供时间 | 用途 |
-| --- | --- | --- |
-| 应用镜像，如 `example-web-001.tar` | 首次部署前 | 包含应用、加密代码、匹配的 AppGuard 运行时和依赖 |
-| 部署说明及必要的配置模板 | 首次部署前 | 明确启动命令、端口、数据卷，以及项目所需的数据库等配置 |
-| 许可证，如 `customer-001.license` | 收到授权申请后 | 授权当前部署使用指定版本 |
-
-### 1. 部署方启动应用
-
-以下命令适用于本仓库示例的交付包；自己的项目使用发行方提供的镜像名和配置。
-
-```sh
-docker load -i example-web-001.tar
-docker volume create example-web-license
-docker run -d --name example-web -p 8000:8000 \
-  --mount type=volume,source=example-web-license,target=/var/lib/appguard \
-  example-web:001
+```mermaid
+flowchart TB
+    subgraph publisher["发行方"]
+        source["Python 源码 + guard.toml"]
+        issuer["签名私钥 issuer.key"]
+        code_key["产品代码密钥 code.key"]
+        build["编译并加密整模块<br/>签署 manifest.json"]
+        issue["签发产品许可证"]
+        source --> build
+        issuer --> build
+        code_key --> build
+        issuer --> issue
+    end
+    subgraph customer["客户应用容器"]
+        web["Flask / WSGI 后端<br/>最外层授权中间件"]
+        portal["/_license/<br/>状态与许可证导入"]
+        runtime["Cython 运行时<br/>模块验签解密、许可证验签"]
+        bundle["加载入口 + 加密模块 + 签名清单"]
+        license[("授权卷<br/>license.json + 时钟记录")]
+        web --> runtime
+        web --> portal
+        bundle --> runtime
+        license --> runtime
+    end
+    build --> bundle
+    issue -.->|"离线交付许可证"| license
 ```
 
-浏览器打开 `http://localhost:8000/_license/`，点击“下载授权申请”，将 `activation-request.json` 发给发行方。远程部署时把 `localhost` 替换为服务器地址。
+系统只维护三种长期密钥值：发行方签名私钥 `issuer.key`、对应验签公钥 `issuer.pub`、每产品固定的代码密钥 `code.key`。公钥和代码密钥编入运行时；签名私钥不交付。普通应用更新复用产品代码密钥和运行时，无需重新签发未到期的产品许可证。
 
-授权目录必须可写且持久保存，重建容器时继续挂载同一个数据卷。应用需要的数据库初始化等操作仍由项目自己的部署流程完成。
+- **代码保护**：构建端用 `compile` / `marshal` 生成整模块字节码，再用 AES-GCM 加密为 `.agc`。镜像内的 `.py` 仅为加载入口；运行时验签、解密后在内存执行，不将明文字节码写回磁盘。
+- **后端授权**：中间件在每个业务请求进入应用之前验签并检查有效期。未授权、过期或许可证无效时，所有业务路径统一返回 **HTTP 403 JSON**，不依据 `Accept`、路径前缀或浏览器类型重定向。
+- **授权页面**：`/_license/`、状态与导入接口独立开放。应用未授权也能启动，客户可随时导入续期许可证，无需重启。
+- **前后端分离**：前端 HTML、JavaScript、CSS 不是加密目标。前端统一处理后端授权错误并跳转授权页；本项目不接管前端路由。不要把所有业务 403 都当作授权到期，应检查响应的授权错误码。
 
-### 2. 发行方签发许可证
+加密让客户拿不到可直接阅读的业务 Python 源码，不保证抵抗主机管理员提取二进制密钥、内存代码或修改运行程序。代码密钥随运行时交付，许可证不承载解密密钥；移除授权中间件后可以调用业务逻辑。这是精简方案的明确边界。
 
-在 AppGuard 仓库根目录、已准备好的 Python 3.11 环境中运行。使用与交付镜像对应的发布记录，将 `--request` 换成收到的申请文件路径，并设置客户标识和到期时间：
+授权只控制新进入的 HTTP 业务请求，不控制 CLI、后台任务、直接函数调用，也不中断已开始的请求或流式响应。离线时钟回退检测只用于辅助发现异常，无法阻止管理员恢复整机或授权卷快照。产品许可证不绑定机器或构建版本，同一许可证可复制到同产品的其他部署。
 
-```sh
-python -m appguard issue \
-  --release .data/releases/example-001/release.json \
-  --issuer-key .data/issuer.key \
-  --request activation-request.json \
-  --customer customer-001 --expires 2027-12-31T23:59:59Z \
-  --out .data/customer-001.license
-```
+## 接入自己的后端
 
-把生成的 `customer-001.license` 交给部署方。签名私钥 `issuer.key` 和发布记录 `release.json` 由发行方备份留存，不放入交付包。
-
-### 3. 部署方导入激活
-
-在 `/_license/` 页面上传许可证并点击“激活授权”。状态变为“授权有效”后即可进入应用，无需重启。
-
-续期时由发行方更新到期时间，并为 `--out` 指定新的文件名，重新签发后在同一页面导入。换用新构建的应用版本后，需要重新下载申请并签发对应许可证。
-
-## 接入自己的项目
-
-Flask 项目在创建和配置 `app` 后注册插件，继续使用原有启动命令：
+Flask 项目在应用与其他中间件配置完成后，最后注册 AppGuard，使授权检查位于业务入口最外层：
 
 ```python
 from appguard_flask import AppGuard
@@ -69,7 +61,7 @@ from appguard_flask import AppGuard
 AppGuard().init_app(app)
 ```
 
-其他 WSGI 项目包装其应用入口：
+其他 WSGI 后端在完成应用组装后包装入口：
 
 ```python
 from appguard_host import LicenseMiddleware
@@ -77,27 +69,48 @@ from appguard_host import LicenseMiddleware
 application = LicenseMiddleware(application)
 ```
 
-在 `guard.toml` 中选择交付文件和需要授权的函数。路径相对于构建命令的 `--source`：
+默认没有业务路径豁免。需要存活探针时，可显式配置 `AppGuard(exempt_paths=("/healthz",))` 或 `LicenseMiddleware(application, exempt_paths=("/healthz",))`；仅完全匹配路径的 GET/HEAD 请求免授权，不按目录前缀放行。探针应只报告进程存活，不暴露业务数据。
+
+在 `guard.toml` 中选择交付文件，不需要配置函数、检查点或改写业务函数：
 
 ```toml
 product_id = "my-web-app"
 include = ["web_app.py", "service.py", "templates/", "static/"]
 exclude = ["**/__pycache__/", "**/.env*", "**/*.pyc"]
-
-[protected_functions]
-"service.py" = ["answer"]
 ```
 
-`include` 支持文件、目录和通配符；Python 文件加密处理，其他文件原样复制。至少选择一个受保护函数，并排除私密配置和开发文件。应用创建、导入、数据库初始化时必须调用的函数不要设为受保护函数，以便未激活时也能启动授权页面。闭包和异步生成器暂不支持作为受保护函数。
+路径相对于 `build --source`，支持文件、目录和通配符。选中的 Python 模块整体加密；非 Python 文件原样复制，需排除私密配置、开发文件和生成的 C 源文件。依赖安装、数据库初始化及后台任务仍由业务项目自己的部署流程负责。
 
-接入后的应用需要安装发行方为本次构建生成的 AppGuard 运行时；具体命令见[首次发行指南](docs/first-release.md)。代码加密不保证阻止拥有主机管理权限的人提取运行中的代码。
+## 签发、激活与续期
 
-## 常用配置
+发行方知道产品标识、客户标识和到期时间后即可签发，不再收集部署申请：
+
+```sh
+python -m appguard issue \
+  --product example-web --issuer-key .data/issuer.key \
+  --customer customer-001 --expires 2027-12-31T23:59:59Z \
+  --out .data/customer-001.license
+```
+
+客户在 `http://服务器地址:8000/_license/` 上传许可证。授权有效后，示例的 `/api/answer?value=8` 返回 `{"answer":50}`。缺失或过期授权时，该接口及其他业务路径均返回 403 JSON。
+
+续期时指定新的到期时间和输出文件，重新签发后导入即可。相同发行方和产品的新构建继续使用原有效许可证；不需要保存每个构建的秘密 `release.json`。授权卷只保存许可证和辅助时钟记录，重建容器时继续挂载。
+
+部署端也可使用命令行查看或导入授权：
+
+```sh
+python -m appguard_host status
+python -m appguard_host install /path/to/customer-001.license
+```
+
+## 配置与迁移
 
 | 环境变量 | 默认值 | 用途 |
 | --- | --- | --- |
-| `APPGUARD_BUNDLE` | `/opt/appguard/bundle` | 加密代码及发布清单目录 |
+| `APPGUARD_BUNDLE` | `/opt/appguard/bundle` | 加密模块及签名清单目录 |
 | `APPGUARD_LICENSE_DIR` | `/var/lib/appguard` | 可写、持久化的授权目录 |
-| `APPGUARD_SECURE_COOKIE` | `0` | 使用 HTTPS 时设为 `1` |
+| `APPGUARD_SECURE_COOKIE` | `0` | HTTPS 部署时设为 `1` |
 
-无法激活时，先查看 `/_license/` 的状态提示，确认许可证对应当前部署和版本、系统时间正确，以及授权目录可写。
+无法激活时查看 `/_license/` 的状态提示，确认许可证产品、发行方、有效期与系统时间。运行时需与产品代码密钥匹配，但不要求每次业务构建重新编译。
+
+旧版 `function-bodies-v1` 包和绑定 `build_id` 的许可证不能直接用于新版。首次迁移需要移除旧函数配置、生成产品代码密钥、重新构建镜像，并重新签发产品许可证。此后普通更新可复用许可证；迁移细节见[首次发行指南](docs/first-release.md#从旧版迁移)。

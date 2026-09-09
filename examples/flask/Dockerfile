@@ -6,12 +6,17 @@ RUN apt-get update \
 WORKDIR /src
 COPY pyproject.toml setup.py appguard_host.py appguard_flask.py ./
 COPY runtime/guard_runtime.pyx runtime/guard_runtime.pyx
-# Build secrets do not invalidate Docker's cache; the manifest changes per release.
-COPY --from=release manifest.json /release-manifest.json
+# Build secrets do not invalidate Docker's cache; key digests do.
+ARG APPGUARD_PUBLIC_KEY_SHA256
+ARG APPGUARD_CODE_KEY_SHA256
 RUN --mount=type=secret,id=publisher_public,required=true \
-    --mount=type=secret,id=bootstrap_key,required=true \
-    APPGUARD_PUBLIC_KEY="$(cat /run/secrets/publisher_public)" \
-    APPGUARD_BOOTSTRAP_KEY="$(cat /run/secrets/bootstrap_key)" \
+    --mount=type=secret,id=code_key,required=true \
+    test -n "$APPGUARD_PUBLIC_KEY_SHA256" \
+    && test -n "$APPGUARD_CODE_KEY_SHA256" \
+    && test "$(sha256sum /run/secrets/publisher_public | cut -d ' ' -f 1)" = "$APPGUARD_PUBLIC_KEY_SHA256" \
+    && test "$(sha256sum /run/secrets/code_key | cut -d ' ' -f 1)" = "$APPGUARD_CODE_KEY_SHA256" \
+    && APPGUARD_PUBLIC_KEY="$(cat /run/secrets/publisher_public)" \
+    APPGUARD_CODE_KEY="$(cat /run/secrets/code_key)" \
     python -m pip wheel . --no-deps --wheel-dir /wheels
 
 FROM python:3.11-slim AS dependencies
@@ -25,7 +30,6 @@ WORKDIR /app
 COPY --from=release tree/ /app/
 COPY --from=release manifest.json /opt/appguard/bundle/manifest.json
 COPY --from=release modules/ /opt/appguard/bundle/modules/
-COPY --from=release functions/ /opt/appguard/bundle/functions/
 RUN useradd --uid 10001 --create-home appguard \
     && mkdir -p /var/lib/appguard \
     && chown 10001:10001 /var/lib/appguard
