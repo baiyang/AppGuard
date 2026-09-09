@@ -1,8 +1,9 @@
-"""Build, audit and exercise an isolated Flask delivery with ephemeral test keys."""
+"""Verify the published-package Docker example with ephemeral test keys."""
 
 import argparse
-import hashlib
 import json
+import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -15,16 +16,20 @@ from pathlib import Path
 
 import requests
 
+ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT))
+
 from tools.verify_http import FormParser
 
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def run(*command, timeout=60, capture=False):
+def run(*command, timeout=60, capture=False, env=None):
+    command = [str(part) for part in command]
+    display = ["env", *(f"{key}={value}" for key, value in env.items()), *command] if env else command
+    print("+ " + shlex.join(display), flush=True)
     return subprocess.run(
-        [str(part) for part in command], cwd=ROOT, check=True,
+        command, cwd=ROOT, check=True,
         text=True, capture_output=capture, timeout=timeout,
+        env={**os.environ, **env} if env is not None else None,
     )
 
 
@@ -70,29 +75,20 @@ def verify(args, result, container):
     with tempfile.TemporaryDirectory(prefix="appguard-delivery-") as directory:
         temp = Path(directory)
         issuer, public, code = temp / "issuer.key", temp / "issuer.pub", temp / "code.key"
-        release, license_path = temp / "release", temp / "customer.license"
+        license_path = temp / "customer.license"
         example = ROOT / "examples" / "flask"
         config = example / "guard.toml"
         product = tomllib.loads(config.read_text())["product_id"]
         cli = (sys.executable, "-m", "appguard")
         run(*cli, "keygen", "--out", issuer)
         run(*cli, "code-keygen", "--out", code)
-        run(*cli, "build", "--source", example, "--config", config,
-            "--issuer-key", issuer, "--code-key", code, "--out", release)
         expires = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
         run(*cli, "issue", "--product", product, "--issuer-key", issuer,
             "--customer", "CI integration test", "--expires", expires,
             "--out", license_path)
         run(
-            "docker", "buildx", "build", "--load", "--platform", args.platform,
-            "--file", example / "Dockerfile", "--tag", args.image,
-            "--build-context", f"application={example}",
-            "--build-context", f"release={release / 'bundle'}",
-            "--secret", f"id=publisher_public,src={public}",
-            "--secret", f"id=code_key,src={code}",
-            "--build-arg", "APPGUARD_PUBLIC_KEY_SHA256=" + hashlib.sha256(public.read_bytes()).hexdigest(),
-            "--build-arg", "APPGUARD_CODE_KEY_SHA256=" + hashlib.sha256(code.read_bytes()).hexdigest(),
-            ROOT, timeout=args.build_timeout,
+            "sh", example / "scripts" / "build.sh", issuer, public, code, args.image,
+            env={"APPGUARD_PLATFORM": args.platform}, timeout=args.build_timeout,
         )
         audit = temp / "image-audit.json"
         run(sys.executable, "-m", "tools.audit_image", "--image", args.image,
@@ -119,6 +115,11 @@ def verify(args, result, container):
             if response.status_code != 403 or response.json()["code"] != "LICENSE_MISSING":
                 raise AssertionError("Missing license did not block the business endpoint")
             result["missing_license_blocks_business"] = True
+            cli_result = run("docker", "exec", container, "python", "/app/scripts/cli.py",
+                             "--value", "8", capture=True)
+            if cli_result.stdout.strip() != "50":
+                raise AssertionError(f"Unexpected protected CLI response: {cli_result.stdout}")
+            result["cli_loads_protected_package"] = True
             activate(session, url, license_path)
             assert_answer(session, url)
             result["valid_license_enables_protected_modules"] = True

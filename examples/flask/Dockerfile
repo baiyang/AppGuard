@@ -1,40 +1,39 @@
 # syntax=docker/dockerfile:1
-FROM python:3.11-slim AS runtime-build
+FROM python:3.11-slim AS publisher
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
-WORKDIR /src
-COPY pyproject.toml /appguard-project.toml
-COPY appguard/_runtime/ ./
-# Build secrets do not invalidate Docker's cache; key digests do.
-ARG APPGUARD_PUBLIC_KEY_SHA256
-ARG APPGUARD_CODE_KEY_SHA256
-RUN --mount=type=secret,id=publisher_public,required=true \
+RUN python -m pip install --no-cache-dir appguard-runtime==0.0.1
+
+FROM publisher AS protected-build
+# Build with --no-cache-filter protected-build: secret changes do not invalidate cache.
+RUN --mount=type=bind,from=application,target=/source \
+    --mount=type=secret,id=issuer_key,required=true \
+    --mount=type=secret,id=publisher_public,required=true \
     --mount=type=secret,id=code_key,required=true \
-    test -n "$APPGUARD_PUBLIC_KEY_SHA256" \
-    && test -n "$APPGUARD_CODE_KEY_SHA256" \
-    && test "$(sha256sum /run/secrets/publisher_public | cut -d ' ' -f 1)" = "$APPGUARD_PUBLIC_KEY_SHA256" \
-    && test "$(sha256sum /run/secrets/code_key | cut -d ' ' -f 1)" = "$APPGUARD_CODE_KEY_SHA256" \
-    && APPGUARD_PUBLIC_KEY="$(cat /run/secrets/publisher_public)" \
-    APPGUARD_CODE_KEY="$(cat /run/secrets/code_key)" \
-    APPGUARD_VERSION="$(python -c 'import pathlib,tomllib; print(tomllib.loads(pathlib.Path("/appguard-project.toml").read_text())["project"]["version"])')" \
-    python -m pip wheel . --no-deps --wheel-dir /wheels
+    appguard build \
+      --source /source --config /source/guard.toml \
+      --issuer-key /run/secrets/issuer_key \
+      --code-key /run/secrets/code_key --out /release \
+    && appguard build-runtime \
+      --public-key /run/secrets/publisher_public \
+      --code-key /run/secrets/code_key --out /wheels
 
 FROM python:3.11-slim AS dependencies
-COPY --from=runtime-build /wheels /wheels
+COPY --from=protected-build /wheels /wheels
 COPY --from=application requirements.txt /requirements.txt
 RUN python -m pip install --no-cache-dir --prefix=/install /wheels/*.whl -r /requirements.txt
 
 FROM python:3.11-slim
 COPY --from=dependencies /install /usr/local
 WORKDIR /app
-COPY --from=release tree/ /app/
-COPY --from=release manifest.json /opt/appguard/bundle/manifest.json
-COPY --from=release modules/ /opt/appguard/bundle/modules/
+COPY --from=protected-build /release/bundle/tree/ /app/
+COPY --from=protected-build /release/bundle/manifest.json /opt/appguard/bundle/manifest.json
+COPY --from=protected-build /release/bundle/modules/ /opt/appguard/bundle/modules/
 RUN useradd --uid 10001 --create-home appguard \
     && mkdir -p /var/lib/appguard \
     && chown 10001:10001 /var/lib/appguard
 USER 10001:10001
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 EXPOSE 8000
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "web_app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "example_web.web_app:app"]

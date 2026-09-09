@@ -1,7 +1,7 @@
 from flask import Flask, request
 
 from appguard_flask import AppGuard
-from service import answer
+from example_web.service import answer
 
 
 app = Flask(__name__)
