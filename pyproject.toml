@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "appguard-runtime"
-version = "0.2.0"
-description = "Licensed encrypted module loader for CPython 3.11 deployments"
+version = "0.3.0"
+description = "Encrypted Python modules and offline product licensing for backend APIs"
 requires-python = ">=3.11,<3.12"
 dependencies = ["cryptography==45.0.4", "werkzeug>=3.1,<4"]
 

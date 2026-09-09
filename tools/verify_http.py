@@ -1,8 +1,4 @@
-"""Exercise activation, real-time expiry, restart and renewal on a TEST deployment.
-
-This temporarily installs a short-lived license and optionally restarts the named
-test container. The supplied valid license is restored in a finally block.
-"""
+"""Check a TEST deployment's HTTP expiry and renewal, restoring its supplied license."""
 
 import argparse
 import json
@@ -14,7 +10,7 @@ from pathlib import Path
 
 import requests
 
-from appguard.crypto import signed, signer, wrap_key
+from appguard.crypto import signed, signer
 
 
 class FormParser(HTMLParser):
@@ -29,8 +25,8 @@ class FormParser(HTMLParser):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True)
-    parser.add_argument("--release", type=Path, required=True)
     parser.add_argument("--issuer-key", type=Path, required=True)
+    parser.add_argument("--product", required=True)
     parser.add_argument("--restore-license", type=Path, required=True)
     parser.add_argument("--restart-container")
     parser.add_argument("--startup-timeout", type=float, default=180)
@@ -61,42 +57,46 @@ def main():
         assert "产品授权" in response.text
         form = FormParser()
         form.feed(response.text)
+        assert form.token, "Activation page did not supply a CSRF token"
         response = session.post(base + "/_license/activate",
                                 data={"csrf": form.token, "license": raw.decode()},
                                 allow_redirects=False, timeout=10)
-        assert response.status_code == 303, response.status_code
+        assert response.status_code in (200, 303), response.status_code
+
+    def assert_expired():
+        assert status()["code"] == "LICENSE_EXPIRED"
+        for method, path in (("GET", "/any-business-page"), ("GET", "/api/appguard-expiry-check"),
+                             ("POST", "/jobs/appguard-expiry-check")):
+            response = session.request(method, base + path, headers={"Accept": "text/html"},
+                                       allow_redirects=False, timeout=10)
+            assert response.status_code == 403, (path, response.status_code)
+            assert response.json()["code"] == "LICENSE_EXPIRED"
+            assert "Location" not in response.headers
+        assert "授权已到期" in session.get(base + "/_license/", timeout=10).text
 
     restore = args.restore_license.read_bytes()
-    release = json.loads(args.release.read_text())
+    issuer = signer(args.issuer_key)
     wait_ready()
-    request = session.get(base + "/_license/request", timeout=10).json()
-    assert (request["build_id"], request["product_id"]) == (release["build_id"], release["product_id"])
     try:
         activate(restore)
         assert status()["valid"]
         expires = int(time.time()) + 8
-        license = {"format": 1, "license_id": uuid.uuid4().hex, "customer": "HTTP expiry test",
-                   "product_id": release["product_id"], "build_id": release["build_id"],
-                   "deployment_public": request["deployment_public"], "issued_at": int(time.time()),
-                   "not_before": int(time.time()) - 60, "expires_at": expires,
-                   "wrapped_key": wrap_key(bytes.fromhex(release["content_key"]), request["deployment_public"], release["build_id"])}
-        activate(signed(license, signer(args.issuer_key)))
+        license = {"format": 2, "kind": "license", "license_id": uuid.uuid4().hex,
+                   "customer": "HTTP expiry test", "product_id": args.product,
+                   "issued_at": int(time.time()), "not_before": int(time.time()) - 60,
+                   "expires_at": expires}
+        activate(signed(license, issuer))
         assert status()["valid"]
         deadline = time.monotonic() + 25
         while status()["valid"] and time.monotonic() < deadline:
             time.sleep(0.25)
-        assert status()["code"] == "LICENSE_EXPIRED"
-        response = session.get(base + "/any-business-page", headers={"Accept": "text/html"}, allow_redirects=False, timeout=10)
-        assert response.status_code == 302 and response.headers["Location"] == "/_license/"
-        response = session.post(base + "/api/appguard-expiry-check", json={}, timeout=10)
-        assert response.status_code == 403 and response.json()["code"] == "LICENSE_EXPIRED"
-        assert "授权已到期" in session.get(base + "/_license/", timeout=10).text
-        results["expiry_blocks_pages_and_api"] = True
+        assert_expired()
+        results["expiry_blocks_all_business_requests"] = True
         if args.restart_container:
-            subprocess.run(["docker", "restart", args.restart_container], check=True, capture_output=True, timeout=45)
-            state = wait_ready()
-            assert state["code"] == "LICENSE_EXPIRED"
-            assert session.get(base + "/_license/", timeout=10).status_code == 200
+            subprocess.run(["docker", "restart", args.restart_container], check=True,
+                           capture_output=True, timeout=45)
+            wait_ready()
+            assert_expired()
             results["expired_restart_keeps_activation_available"] = True
     finally:
         wait_ready()

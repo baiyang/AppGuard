@@ -7,11 +7,6 @@ from service import answer
 app = Flask(__name__)
 
 
-@app.before_request
-def check_license():
-    pass
-
-
 @app.get("/")
 def index():
     return {"status": "ok"}
