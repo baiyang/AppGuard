@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- Add FastAPI registration through `appguard_fastapi.AppGuard` or native ASGI middleware,
+  with the shared offline activation portal and explicit health-check exemptions.
+- Include the FastAPI adapter in private runtime wheels and provide the optional
+  `fastapi` dependency extra; verify installed FastAPI licensing during package checks.
+
 ## [0.0.1] - 2026-09-09
 
 First public PyPI release of AppGuard, supporting CPython 3.11.
