@@ -74,6 +74,58 @@ def reindex():
 
 AppGuard().init_app(app)
 '''
+FASTAPI_APP = '''
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import StreamingResponse
+from appguard_fastapi import AppGuard, LicenseMiddleware
+from service import answer
+
+
+def create_app(registration="extension", *, root_path=""):
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.lifecycle = ["startup"]
+        yield
+        app.state.lifecycle.append("shutdown")
+
+    app = FastAPI(lifespan=lifespan, root_path=root_path)
+
+    @app.get("/api/answer")
+    async def calculate(value: int = 0):
+        return {"answer": answer(value)}
+
+    @app.api_route("/healthz", methods=["GET", "HEAD", "POST"])
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/stream")
+    async def stream():
+        async def chunks():
+            yield b"before"
+            Path(os.environ["APPGUARD_LICENSE_DIR"], "license.json").write_bytes(b"{}")
+            yield b"after"
+        return StreamingResponse(chunks(), media_type="text/plain")
+
+    @app.websocket("/ws")
+    @app.websocket("/healthz")
+    @app.websocket("/_license/ws")
+    async def websocket(socket: WebSocket):
+        await socket.accept()
+        await socket.send_text(await socket.receive_text())
+        await socket.send_text(await socket.receive_text())
+
+    if registration == "direct":
+        app.add_middleware(LicenseMiddleware, exempt_paths=("/healthz",))
+    elif registration == "constructor":
+        AppGuard(app, exempt_paths=("/healthz",))
+    else:
+        AppGuard(exempt_paths=("/healthz",)).init_app(app)
+    return app
+'''
 
 
 @pytest.fixture(scope="session")
@@ -87,6 +139,7 @@ def publisher(tmp_path_factory):
     source.mkdir()
     (source / "service.py").write_text(SERVICE)
     (source / "web_app.py").write_text(WEB_APP)
+    (source / "fastapi_app.py").write_text(FASTAPI_APP)
     config = directory / "guard.toml"
     config.write_text(f'product_id = "{PRODUCT}"\ninclude = ["*.py"]\n')
     return {"directory": directory, "issuer": issuer, "issuer_path": issuer_path,
@@ -600,3 +653,289 @@ def test_license_cli_installs_and_reports_status_without_enrollment(deployment):
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout)["valid"]
     assert {path.name for path in deployment["license_dir"].iterdir()} <= {"license.json", "last-seen"}
+
+
+@pytest.mark.parametrize("registration", ["extension", "constructor", "direct"])
+def test_fastapi_registration_blocks_business_and_exempts_exact_health_paths(deployment, registration):
+    run(deployment, f'''
+from fastapi.testclient import TestClient
+from appguard_fastapi import AppGuard
+from fastapi_app import create_app
+
+app = create_app({registration!r})
+if {registration!r} != "direct":
+    registered = list(app.user_middleware)
+    AppGuard().init_app(app)
+    assert app.user_middleware == registered
+with TestClient(app) as client:
+    assert app.state.lifecycle == ["startup"]
+    if {registration!r} != "direct":
+        AppGuard().init_app(app)
+        assert app.user_middleware == registered
+    for method in ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        for path in ("/", "/api/answer", "/jobs/reindex", "/static/app.js"):
+            response = client.request(method, path, headers={{"Accept": "text/html"}})
+            assert response.status_code == 403, (method, path, response.status_code)
+            assert response.headers["Cache-Control"] == "no-store"
+            assert "Location" not in response.headers
+            if method == "HEAD":
+                assert response.content == b""
+            else:
+                assert response.json()["code"] == "LICENSE_MISSING"
+    assert client.get("/healthz?probe=ready").json() == {{"status": "ok"}}
+    assert client.head("/healthz").status_code == 200
+    assert client.post("/healthz").status_code == 403
+    assert client.get("/healthz/").status_code == 403
+    assert client.get("/healthz/details").status_code == 403
+    assert client.get("/_license/request").status_code == 404
+    assert client.post("/_license/status").status_code == 404
+    assert client.get("/_license/activate").status_code == 404
+    status = client.get("/_license/status")
+    assert status.status_code == 200
+    assert status.json()["code"] == "LICENSE_MISSING"
+    assert status.headers["Cache-Control"] == "no-store"
+    assert client.head("/_license/status").content == b""
+assert app.state.lifecycle == ["startup", "shutdown"]
+''')
+
+
+@pytest.mark.parametrize("submission", ["base64", "upload"])
+def test_fastapi_portal_activation_csrf_and_rejected_renewal(deployment, submission):
+    candidate = deployment["cwd"] / "candidate.license"
+    candidate.write_bytes(license_bytes(deployment))
+    run(deployment, f'''
+import base64
+from pathlib import Path
+import guard_runtime
+from fastapi.testclient import TestClient
+from fastapi_app import create_app
+
+with TestClient(create_app()) as client:
+    page = client.get("/_license/")
+    assert page.status_code == 200
+    assert "产品授权" in page.text
+    assert page.headers["Cache-Control"] == "no-store"
+    assert "HttpOnly" in page.headers["Set-Cookie"]
+    assert "SameSite=Strict" in page.headers["Set-Cookie"]
+    assert client.get("/_license").status_code == 200
+    token = client.cookies.get("appguard_csrf")
+    assert client.post("/_license/activate", data={{"license": "bad"}}).status_code == 403
+    raw = Path({str(candidate)!r}).read_bytes()
+    assert client.post("/_license/activate", data={{"csrf": "非ASCII", "license": raw.decode()}}).status_code == 403
+    assert not guard_runtime.status()["valid"]
+    if {submission!r} == "upload":
+        response = client.post("/_license/activate", data={{"csrf": token}},
+                               files={{"file": ("customer.license", raw)}}, follow_redirects=False)
+    else:
+        response = client.post("/_license/activate", data={{"csrf": token, "license": base64.b64encode(raw).decode()}},
+                               follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["Location"] == "/_license/"
+    assert response.headers["Cache-Control"] == "no-store"
+    state = guard_runtime.status()
+    assert state["valid"]
+    assert client.get("/api/answer?value=8").json() == {{"answer": 50}}
+    assert client.get("/does-not-exist").status_code == 404
+    for invalid in ("bad", "{{", "[]", "null"):
+        token = client.cookies.get("appguard_csrf")
+        response = client.post("/_license/activate", data={{"csrf": token, "license": invalid}})
+        assert response.status_code == 400
+        assert guard_runtime.status() == state
+    token = client.cookies.get("appguard_csrf")
+    for size in (65537, 100001):
+        response = client.post("/_license/activate", data={{"csrf": token}},
+                               files={{"file": ("huge.license", b"x" * size)}})
+        assert response.status_code == 413
+        assert guard_runtime.status() == state
+''')
+
+
+@pytest.mark.parametrize("hosting", ["mounted", "proxy"])
+def test_fastapi_root_path_preserves_portal_and_health_behavior(deployment, hosting):
+    candidate = deployment["cwd"] / "candidate.license"
+    candidate.write_bytes(license_bytes(deployment))
+    run(deployment, f'''
+from pathlib import Path
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from fastapi_app import create_app
+
+prefix = "/prefix"
+if {hosting!r} == "mounted":
+    public_app = FastAPI()
+    public_app.mount(prefix, create_app())
+else:
+    app = create_app(root_path=prefix)
+    async def public_app(scope, receive, send):
+        if scope["type"] in {{"http", "websocket"}}:
+            assert scope["path"].startswith(prefix + "/")
+            scope = dict(scope, path=scope["path"][len(prefix):],
+                         raw_path=scope["raw_path"][len(prefix):])
+        await app(scope, receive, send)
+
+with TestClient(public_app) as client:
+    assert client.get(prefix + "/healthz?probe=ready").json() == {{"status": "ok"}}
+    assert client.head(prefix + "/healthz").status_code == 200
+    for method, path in (("POST", "/healthz"), ("GET", "/healthz/"),
+                         ("GET", "/healthz/details"), ("GET", "/api/answer")):
+        assert client.request(method, prefix + path).status_code == 403
+    page = client.get(prefix + "/_license/")
+    assert page.status_code == 200
+    assert 'action="/prefix/_license/activate"' in page.text
+    assert "Path=/prefix/_license/" in page.headers["Set-Cookie"]
+    assert client.get(prefix + "/_license/status").json()["code"] == "LICENSE_MISSING"
+    token = client.cookies.get("appguard_csrf", path=prefix + "/_license/")
+    raw = Path({str(candidate)!r}).read_bytes()
+    response = client.post(prefix + "/_license/activate",
+                           data={{"csrf": token, "license": raw.decode()}}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["Location"] == prefix + "/_license/"
+    assert client.get(response.headers["Location"]).status_code == 200
+    assert client.get(prefix + "/_license/status").json()["valid"]
+    assert client.get(prefix + "/api/answer?value=8").json() == {{"answer": 50}}
+''')
+
+
+def test_fastapi_registration_rejects_invalid_health_paths_and_late_installation(deployment):
+    run(deployment, '''
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from appguard_fastapi import AppGuard
+
+for paths in ("/healthz", ("healthz",), ("/healthz?ready",), ("/healthz#ready",),
+              ("/health*",), ("/health" + chr(0),), (42,)):
+    app = FastAPI()
+    try:
+        AppGuard(app, exempt_paths=paths)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Invalid health exemption was accepted: " + repr(paths))
+    assert app.user_middleware == []
+    assert not hasattr(app.state, "appguard")
+
+app = FastAPI()
+with TestClient(app):
+    try:
+        AppGuard().init_app(app)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Middleware registration after startup should fail")
+    assert not hasattr(app.state, "appguard")
+''')
+
+
+def test_fastapi_hot_license_replacement_and_removal_block_next_request(deployment):
+    store(deployment, license_bytes(deployment))
+    run(deployment, '''
+import os
+from pathlib import Path
+from fastapi.testclient import TestClient
+from fastapi_app import create_app
+
+path = Path(os.environ["APPGUARD_LICENSE_DIR"], "license.json")
+original = path.read_bytes()
+with TestClient(create_app()) as client:
+    assert client.get("/api/answer?value=8").json() == {"answer": 50}
+    path.write_bytes(b"{}")
+    for _ in range(2):
+        response = client.get("/api/answer?value=8")
+        assert response.status_code == 403
+        assert response.json()["code"] == "LICENSE_INVALID"
+    assert client.get("/_license/status").json()["code"] == "LICENSE_INVALID"
+    path.write_bytes(original)
+    assert client.get("/api/answer?value=8").json() == {"answer": 50}
+    path.unlink()
+    response = client.get("/api/answer?value=8")
+    assert response.status_code == 403
+    assert response.json()["code"] == "LICENSE_MISSING"
+''')
+
+
+def test_fastapi_inflight_stream_finishes_after_license_invalidation(deployment):
+    store(deployment, license_bytes(deployment))
+    run(deployment, '''
+from fastapi.testclient import TestClient
+from fastapi_app import create_app
+
+with TestClient(create_app()) as client:
+    response = client.get("/stream")
+    assert response.status_code == 200
+    assert response.text == "beforeafter"
+    response = client.get("/api/answer")
+    assert response.status_code == 403
+    assert response.json()["code"] == "LICENSE_INVALID"
+''')
+
+
+def test_fastapi_websocket_checks_license_only_at_handshake(deployment):
+    candidate = deployment["cwd"] / "candidate.license"
+    candidate.write_bytes(license_bytes(deployment))
+    run(deployment, f'''
+import os
+from pathlib import Path
+import guard_runtime
+from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
+from fastapi_app import create_app
+
+with TestClient(create_app()) as client:
+    for path in ("/ws", "/healthz", "/_license/ws"):
+        try:
+            with client.websocket_connect(path):
+                raise AssertionError("Unlicensed WebSocket was accepted")
+        except WebSocketDisconnect as exc:
+            assert exc.code == 1008
+    guard_runtime.install_license(Path({str(candidate)!r}).read_bytes())
+    with client.websocket_connect("/ws") as socket:
+        socket.send_text("before")
+        assert socket.receive_text() == "before"
+        Path(os.environ["APPGUARD_LICENSE_DIR"], "license.json").unlink()
+        socket.send_text("after")
+        assert socket.receive_text() == "after"
+    try:
+        with client.websocket_connect("/ws"):
+            raise AssertionError("A new WebSocket bypassed invalidation")
+    except WebSocketDisconnect as exc:
+        assert exc.code == 1008
+''')
+
+
+def test_fastapi_denial_skips_business_body_and_caps_chunked_portal_upload(deployment):
+    run(deployment, '''
+import asyncio
+from appguard_fastapi import LicenseMiddleware
+
+async def business(scope, receive, send):
+    raise AssertionError("Unlicensed request reached business application")
+
+async def exercise():
+    middleware = LicenseMiddleware(business)
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+             "scheme": "http", "method": "POST", "path": "/api/answer",
+             "root_path": "", "query_string": b"", "headers": [],
+             "server": ("testserver", 80), "client": ("127.0.0.1", 12345)}
+    messages = []
+    async def send(message):
+        messages.append(message)
+    async def unread_body():
+        raise AssertionError("Rejected business request body was read")
+    await middleware(scope, unread_body, send)
+    assert messages[0]["status"] == 403
+
+    scope.update(path="/_license/activate",
+                 headers=[(b"content-type", b"application/x-www-form-urlencoded")])
+    messages.clear()
+    reads = 0
+    async def oversized_body():
+        nonlocal reads
+        reads += 1
+        assert reads <= 2, "Middleware continued buffering an oversized body"
+        return {"type": "http.request", "body": b"x" * 60000, "more_body": True}
+    await middleware(scope, oversized_body, send)
+    assert messages[0]["status"] == 413
+    assert (b"cache-control", b"no-store") in messages[0]["headers"]
+
+asyncio.run(exercise())
+''')

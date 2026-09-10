@@ -27,7 +27,7 @@ def build_runtime(public_key_path: Path, code_key_path: Path, output: Path,
     with tempfile.TemporaryDirectory(prefix="appguard-runtime-") as temporary:
         project = Path(temporary)
         for name in ("pyproject.toml", "setup.py", "guard_runtime.pyx", "LICENSE",
-                     "appguard_host.py", "appguard_flask.py"):
+                     "appguard_host.py", "appguard_flask.py", "appguard_fastapi.py"):
             (project / name).write_bytes(template.joinpath(name).read_bytes())
         command = [sys.executable, "-m", "build", "--wheel", "--outdir", str(project / "dist")]
         if not isolation:

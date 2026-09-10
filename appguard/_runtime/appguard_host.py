@@ -31,18 +31,22 @@ STATUS_LABELS = {
 }
 
 
+def _validate_exempt_paths(exempt_paths):
+    if isinstance(exempt_paths, str):
+        raise ValueError("exempt_paths must contain exact absolute health-check paths")
+    exempt_paths = tuple(exempt_paths)
+    if any(
+        not isinstance(path, str) or not path.startswith("/") or any(c in path for c in "?#*\x00")
+        for path in exempt_paths
+    ):
+        raise ValueError("exempt_paths must contain exact absolute health-check paths")
+    return frozenset(exempt_paths)
+
+
 class LicenseMiddleware:
     def __init__(self, application, *, exempt_paths=()):
-        if isinstance(exempt_paths, str):
-            raise ValueError("exempt_paths must contain exact absolute health-check paths")
-        exempt_paths = tuple(exempt_paths)
-        if any(
-            not isinstance(path, str) or not path.startswith("/") or any(c in path for c in "?#*\x00")
-            for path in exempt_paths
-        ):
-            raise ValueError("exempt_paths must contain exact absolute health-check paths")
         self.application = application
-        self.exempt_paths = frozenset(exempt_paths)
+        self.exempt_paths = _validate_exempt_paths(exempt_paths)
         self.lock = threading.RLock()
         self.attempts = {}
         self.product = runtime.product_info()
@@ -52,7 +56,7 @@ class LicenseMiddleware:
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    def _page(self, error=""):
+    def _page(self, error="", *, root_path=""):
         state = runtime.status()
         token = secrets.token_urlsafe(32)
         expiration = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(state["expires_at"] + 8 * 3600)) + "（北京时间）" if state["valid"] else "暂无有效授权"
@@ -77,22 +81,22 @@ input[type=file]{{max-width:100%;margin:8px 0 20px}}.error{{color:#ac233b}}a{{co
 <p>授权状态：<strong>{state_label}</strong></p><p>到期时间：{expiration}</p>
 <p class="error" role="alert">{html.escape(error)}</p>
 <h2>产品信息</h2><dl>{product_fields}</dl>
-<h2>更新授权</h2><form action="/_license/activate" method="post" enctype="multipart/form-data">
+<h2>更新授权</h2><form action="{html.escape(root_path)}/_license/activate" method="post" enctype="multipart/form-data">
 <input type="hidden" name="csrf" value="{token}">
 <label for="license">授权码</label><textarea id="license" name="license" spellcheck="false"></textarea>
 <label for="file">许可证文件</label><input id="file" type="file" name="file" accept=".json,.license,.lic">
 <div><button type="submit">激活授权</button></div></form></main></html>'''
         response = Response(content, content_type="text/html; charset=utf-8")
-        response.set_cookie("appguard_csrf", token, httponly=True, samesite="Strict", path="/_license/",
+        response.set_cookie("appguard_csrf", token, httponly=True, samesite="Strict", path=root_path + "/_license/",
                             secure=os.environ.get("APPGUARD_SECURE_COOKIE", "0") == "1")
         response.headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
                                  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"})
         return response
 
-    def _portal(self, request):
+    def _portal(self, request, *, root_path=""):
         path = request.path
         if path in {"/_license", "/_license/"} and request.method in {"GET", "HEAD"}:
-            return self._page()
+            return self._page(root_path=root_path)
         if path == "/_license/status" and request.method in {"GET", "HEAD"}:
             return self._response(runtime.status())
         if path != "/_license/activate" or request.method != "POST":
@@ -125,10 +129,10 @@ input[type=file]{{max-width:100%;margin:8px 0 20px}}.error{{color:#ac233b}}a{{co
         except RequestEntityTooLarge:
             return self._response({"error": "许可证文件过大"}, 413)
         except (ValueError, runtime.LicenseError):
-            response = self._page("许可证验证失败，请确认授权码完整、未过期，且适用于当前产品。")
+            response = self._page("许可证验证失败，请确认授权码完整、未过期，且适用于当前产品。", root_path=root_path)
             response.status_code = 400
             return response
-        return Response(status=303, headers={"Location": "/_license/", "Cache-Control": "no-store"})
+        return Response(status=303, headers={"Location": root_path + "/_license/", "Cache-Control": "no-store"})
 
     def __call__(self, environ, start_response):
         request = Request(environ)

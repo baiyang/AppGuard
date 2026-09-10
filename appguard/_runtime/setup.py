@@ -18,7 +18,7 @@ if len(code_key) != 64 or any(c not in "0123456789abcdef" for c in code_key):
 
 setup(
     version=version,
-    py_modules=["appguard_host", "appguard_flask"],
+    py_modules=["appguard_host", "appguard_flask", "appguard_fastapi"],
     ext_modules=cythonize(
         [Extension("guard_runtime", ["guard_runtime.pyx"],
                    define_macros=[("APPGUARD_PUBLIC_KEY", '"' + public_key + '"'),

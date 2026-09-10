@@ -12,6 +12,9 @@ requires-python = ">=3.11,<3.12"
 dependencies = ["cryptography==45.0.4", "werkzeug>=3.1,<4"]
 classifiers = ["Private :: Do Not Upload"]
 
+[project.optional-dependencies]
+fastapi = ["fastapi>=0.115,<1"]
+
 [tool.setuptools]
 packages = []
 include-package-data = false

@@ -14,7 +14,8 @@ from zipfile import ZipFile
 
 
 TEMPLATE_FILES = {"pyproject.toml", "setup.py", "guard_runtime.pyx", "LICENSE",
-                  "appguard_host.py", "appguard_flask.py"}
+                  "appguard_host.py", "appguard_flask.py", "appguard_fastapi.py"}
+RUNTIME_MODULES = {"appguard_host.py", "appguard_flask.py", "appguard_fastapi.py"}
 
 
 def audit_wheel(path: Path, *, private: bool = False) -> str:
@@ -35,7 +36,10 @@ def audit_wheel(path: Path, *, private: bool = False) -> str:
             assert parts.suffix not in {".key", ".pub", ".license", ".c", ".pyc", ".pyo"}, name
         if private:
             assert "Private :: Do Not Upload" in metadata.get_all("Classifier", [])
-            assert {"appguard_host.py", "appguard_flask.py"}.issubset(names)
+            assert RUNTIME_MODULES.issubset(names)
+            assert "fastapi" in metadata.get_all("Provides-Extra", [])
+            assert any(requirement.startswith("fastapi") and 'extra == "fastapi"' in requirement
+                       for requirement in metadata.get_all("Requires-Dist", []))
             assert any(name.startswith("guard_runtime.") and name.endswith((".so", ".pyd")) for name in names)
             assert not any(name.endswith(".pyx") or name.startswith("appguard/") for name in names)
         else:
@@ -43,7 +47,7 @@ def audit_wheel(path: Path, *, private: bool = False) -> str:
             assert not any(name.endswith((".so", ".pyd", ".dll", ".dylib")) for name in names)
             assert {f"appguard/_runtime/{name}" for name in TEMPLATE_FILES}.issubset(names)
             assert archive.read("appguard/_runtime/LICENSE") == license_text
-            assert not {"appguard_host.py", "appguard_flask.py"}.intersection(names)
+            assert not RUNTIME_MODULES.intersection(names)
             entrypoints = archive.read(metadata_paths[0].replace("METADATA", "entry_points.txt")).decode()
             assert "appguard = appguard.__main__:main" in entrypoints
         return metadata["Version"]
@@ -115,6 +119,11 @@ def verify(wheel: Path, sdist: Path) -> None:
             "from flask import Flask\nfrom appguard_flask import AppGuard\nfrom service import answer\n"
             "app = Flask(__name__)\n@app.get('/answer')\ndef calculate():\n    return {'answer': answer(8)}\n"
             "AppGuard().init_app(app)\n", encoding="utf-8")
+        (source / "fastapi_app.py").write_text(
+            "from fastapi import FastAPI\nfrom appguard_fastapi import AppGuard\nfrom service import answer\n"
+            "app = FastAPI()\n@app.get('/answer')\ndef calculate():\n    return {'answer': answer(8)}\n"
+            "@app.get('/healthz')\ndef health():\n    return {'ok': True}\n"
+            "AppGuard(app, exempt_paths=('/healthz',))\n", encoding="utf-8")
         config = work / "guard.toml"
         config.write_text('product_id = "package-check"\ninclude = ["*.py"]\n', encoding="utf-8")
         release = work / "release"
@@ -131,7 +140,8 @@ def verify(wheel: Path, sdist: Path) -> None:
         assert audit_wheel(native_wheel, private=True) == version, "Public and runtime versions differ"
 
         customer, _ = environment(work / "customer")
-        run([customer, "-m", "pip", "install", native_wheel, "Flask>=3.1,<4"], work, clean_env)
+        run([customer, "-m", "pip", "install", f"{native_wheel}[fastapi]",
+             "Flask>=3.1,<4", "httpx>=0.27,<1"], work, clean_env)
         run([customer, "-m", "pip", "check"], work, clean_env)
         deployment_env = dict(clean_env, APPGUARD_BUNDLE=str(release / "bundle"),
                               APPGUARD_LICENSE_DIR=str(work / "license"),
@@ -140,10 +150,22 @@ def verify(wheel: Path, sdist: Path) -> None:
              "from web_app import app; client = app.test_client(); "
              "assert client.get('/answer').status_code == 403; "
              "assert client.get('/_license/').status_code == 200"], work, deployment_env)
+        run([customer, "-c", "from fastapi.testclient import TestClient\nfrom fastapi_app import app\n"
+             "with TestClient(app) as client:\n"
+             "    for path in ('/answer', '/docs', '/openapi.json'):\n"
+             "        assert client.get(path).status_code == 403\n"
+             "    assert client.get('/_license/').status_code == 200\n"
+             "    assert client.get('/healthz').status_code == 200\n"], work, deployment_env)
         run([customer, "-m", "appguard_host", "install", license_path], work, deployment_env)
         run([customer, "-c", "from web_app import app; response = app.test_client().get('/answer'); "
              "assert response.status_code == 200; assert response.get_json() == {'answer': 50}"], work, deployment_env)
-    print(f"Verified appguard-runtime {version}: wheel, sdist rebuild, installed CLI, native build, and customer licensing")
+        run([customer, "-c", "from fastapi.testclient import TestClient\nfrom fastapi_app import app\n"
+             "with TestClient(app) as client:\n"
+             "    response = client.get('/answer')\n"
+             "    assert response.status_code == 200\n"
+             "    assert response.json() == {'answer': 50}\n"], work, deployment_env)
+    print(f"Verified appguard-runtime {version}: wheel, sdist rebuild, installed CLI, native build, "
+          "and Flask/FastAPI customer licensing")
 
 
 def main() -> None:
