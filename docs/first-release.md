@@ -13,7 +13,7 @@ git clone https://github.com/baiyang/AppGuard.git
 cd AppGuard
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install appguard-runtime==0.0.1
+python -m pip install appguard-runtime==0.0.2
 mkdir -p .data/delivery
 python -m appguard keygen --out .data/issuer.key
 python -m appguard code-keygen --out .data/products/example-web/code.key
@@ -149,7 +149,7 @@ cp examples/flask/DEPLOY.md .data/delivery/DEPLOY.md
 4. 调整 Dockerfile 的启动命令、工作目录、`PYTHONPATH`、端口及系统依赖。例如代码放在 `src/myapp/` 时，使用 `PYTHONPATH=/app/src` 和 `gunicorn myapp.web:app`。
 5. 构建、审计和验证后导出镜像，同步部署说明中的镜像名、授权卷和配置。
 
-可直接将示例 Dockerfile 复制到自己的项目。它已通过 `python -m pip install --no-cache-dir appguard-runtime==0.0.1` 安装发行工具，无需复制 AppGuard 仓库源码，也无需改写安装步骤。需要复用构建脚本时，同时复制 `scripts/build.sh` 并保留它与项目根目录的相对位置。
+可将示例 Dockerfile 复制到自己的项目。Flask 示例通过 `python -m pip install --no-cache-dir appguard-runtime==0.0.1` 安装发行工具，无需复制 AppGuard 仓库源码。FastAPI 和其他 ASGI 项目需将 `publisher` 阶段的发行工具版本改为 `appguard-runtime==0.0.2`，重新编译包含 ASGI 支持的运行时；FastAPI 项目还需在 `requirements.txt` 中加入 `fastapi` 和所选 ASGI 服务器（如 `uvicorn`），并调整启动命令。需要复用构建脚本时，同时复制 `scripts/build.sh` 并保留它与项目根目录的相对位置。
 
 在自己的项目根目录使用 `-f Dockerfile --build-context application=.`，并将构建命令末尾的默认上下文设为 `.`，保留三个 `--secret` 和 `--no-cache-filter protected-build` 参数。将密钥保存在应用源码目录之外，并调整 secret 的文件路径；默认构建上下文用 `.dockerignore` 排除版本库和开发产物。镜像审计工具可继续从 AppGuard 仓库执行。
 
@@ -172,7 +172,7 @@ appguard build-runtime --public-key .data/issuer.pub \
 
 两个输出目录都必须尚不存在；以后按需选择新目录。加密包只包含 `bundle/tree/` 加载入口、`bundle/modules/` 密文和 `bundle/manifest.json` 签名清单，不生成密钥文件或私密发布记录。构建运行时的隔离环境会下载固定版本的 Cython、setuptools 和 wheel。
 
-生成的 `appguard_product_runtime-0.0.1-*.whl` 只适用于构建时的系统、架构和 CPython 版本，包含客户侧插件和编入产品密钥的原生模块，只应随对应产品私下交付，不能上传公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.1-*.whl` 安装，无需编译器。部署时安装业务依赖，将 `bundle/tree/` 作为应用目录，并通过 `APPGUARD_BUNDLE` 指向包含清单和密文的 `bundle/` 目录。
+使用本指南安装的 `0.0.2` 发行工具生成的 `appguard_product_runtime-0.0.2-*.whl` 只适用于构建时的系统、架构和 CPython 版本，包含客户侧插件和编入产品密钥的原生模块，只应随对应产品私下交付，不能上传公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.2-*.whl` 安装，无需编译器；FastAPI 项目按 [README 的接入说明](../README.md#接入自己的后端)添加 `[fastapi]` 依赖扩展。部署时安装业务依赖，将 `bundle/tree/` 作为应用目录，并通过 `APPGUARD_BUNDLE` 指向包含清单和密文的 `bundle/` 目录。
 
 示例的业务包位于该应用目录下的 `src/example_web/`，因此还需将 `PYTHONPATH` 设置为 `bundle/tree/src/` 的绝对路径，再以 `gunicorn example_web.web_app:app` 启动。独立业务命令位于 `bundle/tree/scripts/cli.py`，使用同一 `PYTHONPATH` 执行。
 

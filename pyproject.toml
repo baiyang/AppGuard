@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "appguard-runtime"
-version = "0.0.1"
+version = "0.0.2"
 description = "Publisher tools for encrypted Python modules and offline product licensing"
 readme = "README.md"
 license = "MIT"

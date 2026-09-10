@@ -11,7 +11,7 @@
 ```sh
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install appguard-runtime==0.0.1
+python -m pip install appguard-runtime==0.0.2
 appguard --help
 ```
 
@@ -178,7 +178,7 @@ appguard build-runtime \
 | `--code-key FILE` | 是 | 与 `build` 使用的相同产品代码密钥文件 |
 | `--out DIR` | 是 | 尚不存在的运行时输出目录 |
 
-命令通过隔离构建环境编译，构建时需要获取构建依赖。成功后，输出目录中有一个 `appguard_product_runtime-0.0.1-*.whl` 文件，其中版本来自已安装的公共发行工具包；文件名的其余部分标明 Python 和平台信息。
+命令通过隔离构建环境编译，构建时需要获取构建依赖。成功后，输出目录中有一个 `appguard_product_runtime-0.0.2-*.whl` 文件，其中版本来自已安装的公共发行工具包；文件名的其余部分标明 Python 和平台信息。
 
 终端 JSON 包含 `wheel`（生成的 wheel 文件路径）和 `distribution`（固定为 `appguard-product-runtime`）。该 wheel 只适用于对应系统、CPU 架构和 CPython 3.11 环境，包含产品代码密钥，应随对应产品私下交付，不能上传公共包仓库。
 

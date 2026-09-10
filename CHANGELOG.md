@@ -2,10 +2,16 @@
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-09-10
+
 - Add FastAPI registration through `appguard_fastapi.AppGuard` or native ASGI middleware,
   with the shared offline activation portal and explicit health-check exemptions.
 - Include the FastAPI adapter in private runtime wheels and provide the optional
   `fastapi` dependency extra; verify installed FastAPI licensing during package checks.
+- Simplify the Flask Docker example with in-image encryption and runtime builds,
+  project-relative source layout, and standalone build and delivery verification scripts.
+- Document the delivery architecture, CLI commands, Base64 license activation,
+  and the boundaries of code protection and offline licensing.
 
 ## [0.0.1] - 2026-09-09
 
