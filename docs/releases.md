@@ -38,16 +38,16 @@ pending publisher。需登录有权持有项目的 PyPI 账号并完成账号要
 ```sh
 git switch main
 git pull --ff-only
-git tag -a v0.0.1 -m "AppGuard v0.0.1"
-git push origin v0.0.1
+git tag -a v0.0.2 -m "AppGuard v0.0.2"
+git push origin v0.0.2
 ```
 
 后续版本替换以上标签。GitHub 的 `Release` 工作流执行以下步骤：
 
 1. 检查标签、项目版本、更新日志与 `main` 提交归属。
 2. 在 Linux 和 macOS 上运行 Python 3.11 测试，包含真实原生运行时测试。
-3. 构建 wheel 和源码包，检查元数据，并在仓库外安装、编译、验证加密应用。
-4. 构建示例 Docker 镜像，审计各层，并验证授权与业务接口。
+3. 构建当前版本的 wheel 和源码包，检查元数据，并在仓库外安装、编译、验证 Flask 和 FastAPI 加密应用。
+4. 使用 Flask 示例固定的已发布版本 `0.0.1` 构建 Docker 镜像，审计各层，并验证授权与业务接口。当前待发布版本的运行时由前两步测试和包安装检查覆盖。
 5. 核对 PyPI 已有同版本文件，使用 Trusted Publishing 上传唯一的公共 wheel 和源码包。
 6. 对照 PyPI 官方接口核验 SHA256，再从正式索引全新安装并运行命令。
 7. 创建 GitHub Release 并附上同一批发行文件。
@@ -62,7 +62,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install '.[test]' build twine
 python -m pytest -q
-python tools/check_release.py --ref refs/tags/v0.0.1
+python tools/check_release.py --ref refs/tags/v0.0.2
 python -m build
 python -m twine check --strict dist/*
 python tools/verify_package.py dist/*.whl dist/*.tar.gz
