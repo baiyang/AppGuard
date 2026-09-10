@@ -21,7 +21,7 @@ python -m appguard code-keygen --out .data/products/example-web/code.key
 
 已有仓库可跳过克隆。签名密钥只生成一次，每个产品的代码密钥也只生成一次，后续普通发布继续使用；上述生成命令不会覆盖已有密钥。三种密钥的区别见[密钥说明](keys.md)。
 
-本指南从仓库取得 Flask 示例、Dockerfile 和镜像审计工具；Dockerfile 从 PyPI 安装固定版本 `appguard-runtime==0.0.1`，构建不依赖 AppGuard 仓库源码。仅使用自己的项目时可直接复制 Dockerfile，按下方说明调整应用配置。开发仓库内尚未发布的修改时，宿主机改为 `python -m pip install -e '.[test]'`；Dockerfile 仍使用固定的已发布版本。
+本指南从仓库取得 Flask 示例、Dockerfile 和镜像审计工具；Dockerfile 从 PyPI 安装固定版本 `appguard-runtime==0.0.2`，构建不依赖 AppGuard 仓库源码。仅使用自己的项目时可直接复制 Dockerfile，按下方说明调整应用配置。开发仓库内尚未发布的修改时，宿主机改为 `python -m pip install -e '.[test]'`；Dockerfile 仍使用固定的已发布版本。
 
 示例按项目目录组织：`src/example_web/` 包内放置 `__init__.py`、`web_app.py` 和业务模块 `service.py`，`scripts/` 放置业务入口 `cli.py`、镜像构建脚本 `build.sh` 和交付验证脚本 `verify_delivery.py`；Dockerfile、依赖清单及 `guard.toml` 位于示例项目根目录。配置 `include = ["src/", "scripts/cli.py"]` 只选择业务包和业务命令，共加密四个 Python 模块，不交付构建、验证脚本。授权入口只限制 Web 业务请求，CLI 不检查许可证。
 
@@ -149,7 +149,7 @@ cp examples/flask/DEPLOY.md .data/delivery/DEPLOY.md
 4. 调整 Dockerfile 的启动命令、工作目录、`PYTHONPATH`、端口及系统依赖。例如代码放在 `src/myapp/` 时，使用 `PYTHONPATH=/app/src` 和 `gunicorn myapp.web:app`。
 5. 构建、审计和验证后导出镜像，同步部署说明中的镜像名、授权卷和配置。
 
-可将示例 Dockerfile 复制到自己的项目。Flask 示例通过 `python -m pip install --no-cache-dir appguard-runtime==0.0.1` 安装发行工具，无需复制 AppGuard 仓库源码。FastAPI 和其他 ASGI 项目需将 `publisher` 阶段的发行工具版本改为 `appguard-runtime==0.0.2`，重新编译包含 ASGI 支持的运行时；FastAPI 项目还需在 `requirements.txt` 中加入 `fastapi` 和所选 ASGI 服务器（如 `uvicorn`），并调整启动命令。需要复用构建脚本时，同时复制 `scripts/build.sh` 并保留它与项目根目录的相对位置。
+可将示例 Dockerfile 复制到自己的项目。Flask 示例通过 `python -m pip install --no-cache-dir appguard-runtime==0.0.2` 安装发行工具，可编译包含 Flask 和 ASGI 支持的运行时，无需复制 AppGuard 仓库源码。FastAPI 项目还需在 `requirements.txt` 中加入 `fastapi` 和所选 ASGI 服务器（如 `uvicorn`），并调整启动命令。需要复用构建脚本时，同时复制 `scripts/build.sh` 并保留它与项目根目录的相对位置。
 
 在自己的项目根目录使用 `-f Dockerfile --build-context application=.`，并将构建命令末尾的默认上下文设为 `.`，保留三个 `--secret` 和 `--no-cache-filter protected-build` 参数。将密钥保存在应用源码目录之外，并调整 secret 的文件路径；默认构建上下文用 `.dockerignore` 排除版本库和开发产物。镜像审计工具可继续从 AppGuard 仓库执行。
 

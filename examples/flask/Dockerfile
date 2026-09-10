@@ -3,7 +3,7 @@ FROM python:3.11-slim AS publisher
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN python -m pip install --no-cache-dir appguard-runtime==0.0.1
+RUN python -m pip install --no-cache-dir appguard-runtime==0.0.2
 
 FROM publisher AS protected-build
 # Build with --no-cache-filter protected-build: secret changes do not invalidate cache.

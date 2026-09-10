@@ -1,6 +1,6 @@
 # Flask 示例：从源码构建并运行
 
-本示例使用 Dockerfile 从公共 PyPI 安装 `appguard-runtime==0.0.1`，在镜像构建期间加密 Python 源码并编译产品运行时。流程是：准备环境、生成一次密钥、构建镜像、启动容器、导入许可证。
+本示例使用 Dockerfile 从公共 PyPI 安装 `appguard-runtime==0.0.2`，在镜像构建期间加密 Python 源码并编译产品运行时。流程是：准备环境、生成一次密钥、构建镜像、启动容器、导入许可证。
 
 以下命令适用于 macOS / Linux 的 shell，均在 **AppGuard 仓库根目录**执行。克隆仓库是为了获取示例文件和验证工具，不是安装 AppGuard 的必要步骤；接入自己的项目无需克隆。已有仓库时直接进入该目录；否则先获取示例：
 
@@ -40,7 +40,7 @@ docker info
 docker buildx version
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install appguard-runtime==0.0.1
+python -m pip install appguard-runtime==0.0.2
 ```
 
 宿主机的 AppGuard 用于生成密钥和签发许可证。源码加密、C 编译器安装、运行时编译和 `requirements.txt` 依赖安装均由 Dockerfile 完成。
