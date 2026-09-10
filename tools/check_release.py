@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ref", help="Full Git ref, e.g. refs/tags/v0.0.1")
+    parser.add_argument("--ref", help="Full Git ref, e.g. refs/tags/v0.0.2")
     parser.add_argument("--notes-out", type=Path, help="Write only this version's release notes")
     args = parser.parse_args()
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]

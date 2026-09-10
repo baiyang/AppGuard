@@ -20,7 +20,7 @@ appguard keygen --out .data/issuer.key
 appguard code-keygen --out .data/products/example-web/code.key
 ```
 
-然后按[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)直接构建镜像。Flask 示例 Dockerfile 从 PyPI 安装固定版本 `appguard-runtime==0.0.1`，加密源码、编译产品运行时并组装交付镜像。复制到 FastAPI 或其他 ASGI 项目时，需将 Dockerfile 中的发行工具版本改为 `0.0.2`，并按下方接入说明调整运行依赖和启动命令。构建无需 AppGuard 仓库源码，宿主机无需预先生成加密包，也无需安装 C 编译器。密钥通过 BuildKit secrets 传入，最终镜像只包含运行依赖、产品运行时和加密应用。
+然后按[首次发行指南](https://github.com/baiyang/AppGuard/blob/main/docs/first-release.md)直接构建镜像。Flask 示例 Dockerfile 从 PyPI 安装固定版本 `appguard-runtime==0.0.2`，加密源码、编译产品运行时并组装交付镜像。复制到 FastAPI 或其他 ASGI 项目时，按下方接入说明调整运行依赖和启动命令。构建无需 AppGuard 仓库源码，宿主机无需预先生成加密包，也无需安装 C 编译器。密钥通过 BuildKit secrets 传入，最终镜像只包含运行依赖、产品运行时和加密应用。
 
 后续发布复用密钥，重新执行镜像构建即可。每次构建都需保留指南中的 `--no-cache-filter protected-build`，确保加密和编译使用当前密钥。自行管理非 Docker 部署时，指南也提供独立构建加密包和私有运行时 wheel 的命令；不同产品应使用各自独立的容器或虚拟环境。
 
@@ -203,7 +203,7 @@ FastAPI 和 ASGI 支持从 `0.0.2` 开始，需使用 `appguard-runtime==0.0.2` 
 python3.11 -m pip install '/path/to/appguard_product_runtime-0.0.2-cp311-cp311-linux_x86_64.whl[fastapi]'
 ```
 
-复用 Flask Dockerfile 时，将 `publisher` 阶段的安装版本改为 `appguard-runtime==0.0.2`，在应用的 `requirements.txt` 中加入 `fastapi` 和所选 ASGI 服务器（如 `uvicorn`），并将启动命令改为对应的 ASGI 入口。
+复用 Flask Dockerfile 时，在应用的 `requirements.txt` 中加入 `fastapi` 和所选 ASGI 服务器（如 `uvicorn`），并将启动命令改为对应的 ASGI 入口。
 
 在配置其他中间件之后、应用开始处理请求之前，最后注册 AppGuard：
 

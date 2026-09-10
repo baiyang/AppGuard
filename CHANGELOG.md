@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Update the Flask Docker example and all installation examples to the published `0.0.2` release.
+
 ## [0.0.2] - 2026-09-10
 
 - Add FastAPI registration through `appguard_fastapi.AppGuard` or native ASGI middleware,
