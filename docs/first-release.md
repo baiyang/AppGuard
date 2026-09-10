@@ -172,17 +172,10 @@ appguard build-runtime --public-key .data/issuer.pub \
 
 两个输出目录都必须尚不存在；以后按需选择新目录。加密包只包含 `bundle/tree/` 加载入口、`bundle/modules/` 密文和 `bundle/manifest.json` 签名清单，不生成密钥文件或私密发布记录。构建运行时的隔离环境会下载固定版本的 Cython、setuptools 和 wheel。
 
-使用本指南安装的 `0.0.2` 发行工具生成的 `appguard_product_runtime-0.0.2-*.whl` 只适用于构建时的系统、架构和 CPython 版本，包含客户侧插件和编入产品密钥的原生模块，只应随对应产品私下交付，不能上传公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.2-*.whl` 安装，无需编译器；FastAPI 项目按 [README 的接入说明](../README.md#接入自己的后端)添加 `[fastapi]` 依赖扩展。部署时安装业务依赖，将 `bundle/tree/` 作为应用目录，并通过 `APPGUARD_BUNDLE` 指向包含清单和密文的 `bundle/` 目录。
+使用本指南安装的 `0.0.2` 发行工具生成的 `appguard_product_runtime-0.0.2-*.whl` 只适用于构建时的系统、架构和 CPython 版本，包含客户侧插件和编入产品密钥的原生模块，只应随对应产品私下交付，不能上传公共包仓库。客户使用 `python -m pip install /path/to/appguard_product_runtime-0.0.2-*.whl` 安装，无需编译器；FastAPI 项目按[接入说明](integration.md#安装产品运行时)添加 `[fastapi]` 依赖扩展。部署时安装业务依赖，将 `bundle/tree/` 作为应用目录，并通过 `APPGUARD_BUNDLE` 指向包含清单和密文的 `bundle/` 目录。
 
 示例的业务包位于该应用目录下的 `src/example_web/`，因此还需将 `PYTHONPATH` 设置为 `bundle/tree/src/` 的绝对路径，再以 `gunicorn example_web.web_app:app` 启动。独立业务命令位于 `bundle/tree/scripts/cli.py`，使用同一 `PYTHONPATH` 执行。
 
-## 从旧版迁移
+## 更新与授权范围
 
-旧版采用函数体拆分、每次发布独立密钥和构建版本绑定许可证；新版采用 `format: 2`、`kind: manifest`、`layout: modules-v1` 的整模块包及产品许可证，旧包和旧许可证均不兼容。
-
-1. 删除 `guard.toml` 中的 `protected_functions` 与 `checkpoints`，去掉仅为检查点保留的空函数。
-2. 为产品生成固定 `code.key`，按上述命令重新加密全部业务模块、构建运行时和镜像。
-3. 使用原发行方签名私钥和产品标识重新签发一次新版许可证，在新镜像中导入。保留业务数据，旧 `deployment.key` 不再使用。
-4. 更新前端授权错误处理：业务请求现在统一返回 403 JSON，不再自动 302 跳转。
-
-迁移完成后，相同产品和发行方的普通应用更新复用许可证，不再重新申请授权。更换代码密钥需要重建全部模块和运行时，但仍可使用原有效产品许可证；更换签名私钥则需要重新交付运行时并重新签发许可证。同一产品许可证可以复制到不同安装实例，当前不提供机器绑定。
+相同产品和发行方的普通应用更新可复用有效许可证。更换代码密钥需要重建全部模块和运行时，但仍可使用原有效产品许可证；更换签名私钥则需要重新交付运行时并重新签发许可证。同一产品许可证可以复制到不同安装实例，当前不提供机器绑定。

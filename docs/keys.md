@@ -32,7 +32,7 @@ python -m appguard code-keygen --out .data/products/example-web/code.key
 
 模块加密使用 AES-GCM；每个密文使用随机 nonce，密文与构建标识和模块路径关联。清单保存密文摘要及 `code_key_sha256`，使运行时能检测产物篡改或产品代码密钥错配。每个构建仍有 `build_id` 用于识别代码包，但许可证不再绑定它。
 
-签名清单和许可证使用版本化封装。新版清单为 `format: 2`、`kind: manifest`、`layout: modules-v1`；产品许可证为 `format: 2`、`kind: license`。许可证内容只有 `product_id`、`customer`、`license_id`、`issued_at`、`not_before`、`expires_at` 等授权元数据，不含代码密钥、部署身份或 `wrapped_key`。
+签名清单和许可证使用版本化封装。清单为 `format: 2`、`kind: manifest`、`layout: modules-v1`；产品许可证为 `format: 2`、`kind: license`。许可证内容只有 `product_id`、`customer`、`license_id`、`issued_at`、`not_before`、`expires_at` 等授权元数据，不含代码密钥、部署身份或 `wrapped_key`。
 
 <a id="license-format"></a>
 
@@ -207,7 +207,6 @@ BuildKit secret 本身不影响缓存。**每次构建都必须保留 `--no-cach
 | 丢失签名私钥 | 已有有效许可证继续有效；后续签发需恢复私钥，或按更换签名私钥处理 |
 | 丢失客户许可证 | 恢复许可证备份或由发行方重新提供；没有需要恢复的部署私钥 |
 | 密钥泄露 | 轮换密钥只影响后续交付，不能撤回已泄露密钥或已交付的离线旧版本 |
-| 从旧版迁移 | 一次性重建整模块包和运行时，并重签新版产品许可证，见[迁移步骤](first-release.md#从旧版迁移) |
 
 ## 不是密钥的字段
 
